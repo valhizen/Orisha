@@ -3,15 +3,32 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
+mod gpu;
 
-#[derive(Default)]
+
 struct App {
     window: Option<Window>,
+    device: Option<gpu::device::Device>
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self {
+            window: None,
+            device: None,
+        }
+    }
 }
 
 impl ApplicationHandler for App{
-    fn resumed(&mut self, event_loop : &ActiveEventLoop) {
-        self.window = Some(event_loop.create_window(Window::default_attributes()).unwrap());
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let window = event_loop
+            .create_window(Window::default_attributes())
+            .unwrap();
+        let device = gpu::device::Device::new(&window)
+            .expect("Failed to initialize Vulkan");
+        self.window = Some(window);
+        self.device = Some(device);
     }
 
     fn window_event(&mut self, event_loop : &ActiveEventLoop, _id:WindowId, event : WindowEvent){
@@ -24,10 +41,8 @@ impl ApplicationHandler for App{
                 self.window.as_ref().unwrap().request_redraw();
             }
             _ => (),
-
         }
     }
-
 }
 
 fn main(){
