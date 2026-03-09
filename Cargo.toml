@@ -1,0 +1,9 @@
+[package]
+name = "orisha"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ash = { version = "0.38.0", features = ["debug", "default", "linked", "loaded", "std"] }
+glam = "0.32.1"
+winit = { version = "0.30.13", features = ["x11"] }
