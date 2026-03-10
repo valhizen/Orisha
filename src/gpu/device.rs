@@ -27,7 +27,7 @@ unsafe extern "system" fn vulkan_debug_callback(
     }
 }
 
-/// Score a physical device for selection. Returns -1 if unsuitable.
+// Score a physical device; returns -1 if unsuitable.
 fn score_device(
     instance: &Instance,
     pdevice: vk::PhysicalDevice,
@@ -75,14 +75,8 @@ fn score_device(
             return -1;
         }
 
-        // On hybrid GPU laptops, only prefer discrete if explicitly requested
-        let prefer_discrete = std::env::var("DRI_PRIME").is_ok_and(|v| v == "1")
-            || std::env::var("ORISHA_GPU").is_ok_and(|v| v == "discrete");
-
         match props.device_type {
-            vk::PhysicalDeviceType::DISCRETE_GPU => {
-                if prefer_discrete { 1000 } else { 50 }
-            }
+            vk::PhysicalDeviceType::DISCRETE_GPU => 1000,
             vk::PhysicalDeviceType::INTEGRATED_GPU => 100,
             vk::PhysicalDeviceType::VIRTUAL_GPU => 10,
             _ => 1,
@@ -90,6 +84,7 @@ fn score_device(
     }
 }
 
+// Vulkan instance, device, surface, and debug setup.
 pub struct Device {
     pub entry: Entry,
     pub instance: Instance,
@@ -134,7 +129,6 @@ impl Device {
 
             let instance = entry.create_instance(&instance_info, None)?;
 
-            // Debug messenger (errors + warnings only)
             let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
                 .message_severity(
                     vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
@@ -151,7 +145,6 @@ impl Device {
             let debug_call_back = debug_utils_loader
                 .create_debug_utils_messenger(&debug_info, None)?;
 
-            // Surface
             let surface_loader = surface::Instance::new(&entry, &instance);
             let surface = ash_window::create_surface(
                 &entry,
@@ -161,7 +154,6 @@ impl Device {
                 None,
             )?;
 
-            // Pick best GPU
             let pdevices = instance.enumerate_physical_devices()?;
 
             println!("── Available GPUs ──");
@@ -183,7 +175,6 @@ impl Device {
             let name = ffi::CStr::from_ptr(sel.device_name.as_ptr()).to_string_lossy();
             println!("Selected GPU: {name}\n");
 
-            // Queue family (graphics + present)
             let queue_family_index = instance
                 .get_physical_device_queue_family_properties(pdevice)
                 .iter()
@@ -197,7 +188,6 @@ impl Device {
                 })
                 .expect("No graphics+present queue family");
 
-            // Logical device with Vulkan 1.3 features
             let priorities = [1.0f32];
             let queue_info = vk::DeviceQueueCreateInfo::default()
                 .queue_family_index(queue_family_index)

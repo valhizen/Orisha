@@ -18,8 +18,8 @@ use super::{
 
 const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
+// Owns all GPU resources and drives frame rendering.
 pub struct Renderer {
-    // Drop order: allocator before device (needs live VkDevice to free memory)
     pub allocator: GpuAllocator,
     pub device: Device,
     pub swapchain: SwapChain,
@@ -86,7 +86,6 @@ impl Renderer {
         })
     }
 
-    /// Recreate swapchain + depth on window resize.
     pub fn resize(&mut self, width: u32, height: u32) {
         self.swapchain
             .recreate(&self.device, width, height)
@@ -110,7 +109,6 @@ impl Renderer {
         self.depth_alloc = Some(alloc);
     }
 
-    /// Draw a frame. Closure receives (device, cmd, pipeline_layout) for draw commands.
     pub fn draw_frame<F>(&mut self, camera: &CameraUbo, record_fn: F)
     where
         F: FnOnce(&ash::Device, vk::CommandBuffer, vk::PipelineLayout),
@@ -118,7 +116,6 @@ impl Renderer {
         unsafe {
             let frame = self.frame_index % MAX_FRAMES_IN_FLIGHT;
 
-            // Wait for this frame slot
             self.device
                 .device
                 .wait_for_fences(&[self.sync.fences[frame]], true, u64::MAX)
@@ -128,7 +125,6 @@ impl Renderer {
                 .reset_fences(&[self.sync.fences[frame]])
                 .unwrap();
 
-            // Acquire swapchain image
             let acquire = self.swapchain.swapchain_loader.acquire_next_image(
                 self.swapchain.swapchain,
                 u64::MAX,
@@ -142,10 +138,8 @@ impl Renderer {
                 Err(e) => panic!("acquire_next_image failed: {e}"),
             };
 
-            // Update camera UBO
             self.camera_ubos[frame].write(camera);
 
-            // Record commands
             let cmd = self.commands.draw_buffers[frame];
             let extent = self.swapchain.surface_resolution;
             let color_image = self.swapchain.present_images[image_index];
@@ -160,7 +154,6 @@ impl Renderer {
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
             self.device.device.begin_command_buffer(cmd, &begin).unwrap();
 
-            // Transition: UNDEFINED -> attachment optimal
             let color_barrier = vk::ImageMemoryBarrier2::default()
                 .src_stage_mask(vk::PipelineStageFlags2::TOP_OF_PIPE)
                 .src_access_mask(vk::AccessFlags2::NONE)
@@ -190,7 +183,6 @@ impl Renderer {
                 &vk::DependencyInfo::default().image_memory_barriers(&barriers),
             );
 
-            // Begin dynamic rendering
             let color_attach = vk::RenderingAttachmentInfo::default()
                 .image_view(color_view)
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
@@ -225,7 +217,6 @@ impl Renderer {
 
             self.device.device.cmd_begin_rendering(cmd, &rendering);
 
-            // Bind pipeline + descriptors
             self.device.device.cmd_bind_pipeline(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -241,7 +232,6 @@ impl Renderer {
                 &[],
             );
 
-            // Dynamic viewport + scissor
             self.device.device.cmd_set_viewport(
                 cmd,
                 0,
@@ -264,12 +254,10 @@ impl Renderer {
                 }],
             );
 
-            // User draw commands
             record_fn(&self.device.device, cmd, self.pipeline.pipeline_layout);
 
             self.device.device.cmd_end_rendering(cmd);
 
-            // Transition color -> PRESENT_SRC_KHR
             let to_present = vk::ImageMemoryBarrier2::default()
                 .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
                 .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
@@ -288,7 +276,6 @@ impl Renderer {
 
             self.device.device.end_command_buffer(cmd).unwrap();
 
-            // Submit
             let wait_sems = [self.sync.image_available[frame]];
             let signal_sems = [self.sync.render_finished[image_index]];
             let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
@@ -308,7 +295,6 @@ impl Renderer {
                 )
                 .expect("Queue submit failed");
 
-            // Present
             let swapchains = [self.swapchain.swapchain];
             let indices = [image_index as u32];
 

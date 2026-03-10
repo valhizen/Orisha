@@ -4,7 +4,7 @@ use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, Allocat
 
 use super::device::Device;
 
-/// Thread-safe GPU memory sub-allocator.
+// Thread-safe GPU memory allocator.
 pub struct GpuAllocator {
     inner: Mutex<Allocator>,
 }

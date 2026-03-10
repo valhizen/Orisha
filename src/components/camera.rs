@@ -6,6 +6,7 @@ pub enum CameraMode {
     Free,
 }
 
+// Third-person / first-person / free camera.
 pub struct Camera {
     pub position: Vec3,
     pub rotation: Quat,
@@ -114,7 +115,7 @@ impl Camera {
         }
     }
 
-    /// Projection matrix with Vulkan Y-flip.
+    // Projection with Vulkan Y-flip.
     pub fn projection_matrix(&self, aspect_ratio: f32) -> Mat4 {
         let mut proj = Mat4::perspective_rh(
             self.fov,

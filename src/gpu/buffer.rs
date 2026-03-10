@@ -6,6 +6,7 @@ use gpu_allocator::{
 
 use super::{allocator::GpuAllocator, commands::Commands, device::Device};
 
+// Per-vertex data sent to the GPU.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
@@ -43,7 +44,7 @@ impl Vertex {
     }
 }
 
-/// Camera matrices (set 0, binding 0).
+// Camera view/projection uniform buffer.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CameraUbo {
@@ -51,14 +52,14 @@ pub struct CameraUbo {
     pub proj: [[f32; 4]; 4],
 }
 
-/// Per-object model matrix via push constants (64 bytes).
+// Per-object model matrix push constant.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PushConstants {
     pub model: [[f32; 4]; 4],
 }
 
-/// Vulkan buffer backed by gpu-allocator.
+// Vulkan buffer with gpu-allocator backing.
 pub struct GpuBuffer {
     pub buffer: vk::Buffer,
     pub allocation: Option<Allocation>,
@@ -104,7 +105,7 @@ impl GpuBuffer {
         }
     }
 
-    /// Write data to a host-visible buffer via its mapped pointer.
+    // Write to a host-visible mapped buffer.
     pub fn write<T: bytemuck::NoUninit>(&self, data: &T) {
         let alloc = self.allocation.as_ref().expect("Buffer already destroyed");
         let ptr = alloc.mapped_ptr().expect("Buffer not mapped");
@@ -117,7 +118,7 @@ impl GpuBuffer {
         }
     }
 
-    /// Upload data to device-local memory via staging buffer.
+    // Upload data to device-local memory via a staging buffer.
     pub fn device_local(
         device: &Device,
         allocator: &GpuAllocator,
@@ -175,7 +176,7 @@ impl GpuBuffer {
     }
 }
 
-/// Uploaded vertex + index buffers ready for indexed draw calls.
+// Vertex + index buffers ready for indexed draw calls.
 pub struct GpuMesh {
     pub vertex_buffer: GpuBuffer,
     pub index_buffer: GpuBuffer,

@@ -5,6 +5,7 @@ use super::buffer::{PushConstants, Vertex};
 use super::device::Device;
 use super::swapchain::SwapChain;
 
+// Graphics pipeline with dynamic rendering.
 pub struct Pipeline {
     pub pipeline_layout: vk::PipelineLayout,
     pub pipeline: vk::Pipeline,
@@ -109,7 +110,6 @@ impl Pipeline {
         let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
             .attachments(std::slice::from_ref(&blend_attachment));
 
-        // Dynamic rendering — no VkRenderPass needed
         let color_formats = [swapchain.surface_format.format];
         let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(&color_formats)

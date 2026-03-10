@@ -5,6 +5,7 @@ use super::buffer::GpuBuffer;
 use super::commands::MAX_FRAMES_IN_FLIGHT;
 use super::device::Device;
 
+// Descriptor pool, layout, and per-frame sets for camera UBO.
 pub struct Descriptors {
     pub pool: vk::DescriptorPool,
     pub camera_layout: vk::DescriptorSetLayout,
@@ -14,7 +15,6 @@ pub struct Descriptors {
 impl Descriptors {
     pub fn new(device: &Device) -> Result<Self, Box<dyn Error>> {
         unsafe {
-            // Layout: binding 0 = UBO (vertex + fragment)
             let binding = vk::DescriptorSetLayoutBinding::default()
                 .binding(0)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
@@ -28,7 +28,6 @@ impl Descriptors {
                 .device
                 .create_descriptor_set_layout(&layout_info, None)?;
 
-            // Pool
             let pool_size = vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(MAX_FRAMES_IN_FLIGHT as u32);
@@ -39,7 +38,6 @@ impl Descriptors {
 
             let pool = device.device.create_descriptor_pool(&pool_info, None)?;
 
-            // Allocate one set per frame-in-flight
             let layouts = [camera_layout; MAX_FRAMES_IN_FLIGHT];
             let alloc_info = vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(pool)
@@ -57,7 +55,6 @@ impl Descriptors {
         }
     }
 
-    /// Bind UBO buffers to descriptor sets.
     pub fn write_camera_sets(
         &self,
         device: &Device,

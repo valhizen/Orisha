@@ -3,6 +3,7 @@ use std::error::Error;
 
 use super::device::Device;
 
+// Vulkan swapchain and its image views.
 pub struct SwapChain {
     pub swapchain_loader: swapchain::Device,
     pub swapchain: vk::SwapchainKHR,
@@ -84,7 +85,6 @@ impl SwapChain {
                 .surface_loader
                 .get_physical_device_surface_capabilities(device.pdevice, device.surface)?;
 
-            // Triple buffering
             let mut image_count = caps.min_image_count + 1;
             if caps.max_image_count > 0 && image_count > caps.max_image_count {
                 image_count = caps.max_image_count;
@@ -105,7 +105,6 @@ impl SwapChain {
                     caps.current_transform
                 };
 
-            // MAILBOX = triple buffering, FIFO = vsync fallback
             let present_modes = device
                 .surface_loader
                 .get_physical_device_surface_present_modes(device.pdevice, device.surface)?;
