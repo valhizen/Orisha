@@ -10,6 +10,10 @@ fn main() {
     let shaders = [
         ("basic.vert", "basic_vert.spv"),
         ("basic.frag", "basic_frag.spv"),
+        ("imgui.vert", "imgui_vert.spv"),
+        ("imgui.frag", "imgui_frag.spv"),
+        ("sky.vert",   "sky_vert.spv"),
+        ("sky.frag",   "sky_frag.spv"),
     ];
 
     for (src, dst) in &shaders {

@@ -1,4 +1,3 @@
-// Frame timing and fixed-step accumulator.
 pub struct GameClock {
     start: std::time::Instant,
     last_frame: std::time::Instant,

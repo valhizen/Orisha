@@ -1,11 +1,12 @@
 use ash::vk;
 use std::error::Error;
 
+
 use super::buffer::{PushConstants, Vertex};
 use super::device::Device;
 use super::swapchain::SwapChain;
+use super::utils::load_shader;
 
-// Graphics pipeline with dynamic rendering.
 pub struct Pipeline {
     pub pipeline_layout: vk::PipelineLayout,
     pub pipeline: vk::Pipeline,
@@ -31,7 +32,7 @@ impl Pipeline {
         camera_layout: vk::DescriptorSetLayout,
     ) -> Result<vk::PipelineLayout, Box<dyn Error>> {
         let push_range = vk::PushConstantRange::default()
-            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
             .size(std::mem::size_of::<PushConstants>() as u32);
 
@@ -50,8 +51,8 @@ impl Pipeline {
         layout: vk::PipelineLayout,
         depth_format: vk::Format,
     ) -> Result<vk::Pipeline, Box<dyn Error>> {
-        let vert = Self::load_shader(device, "shaders/compiled/basic_vert.spv")?;
-        let frag = Self::load_shader(device, "shaders/compiled/basic_frag.spv")?;
+        let vert = load_shader(device, "shaders/compiled/basic_vert.spv")?;
+        let frag = load_shader(device, "shaders/compiled/basic_frag.spv")?;
 
         let entry = c"main";
         let stages = [
@@ -84,7 +85,7 @@ impl Pipeline {
 
         let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
             .polygon_mode(vk::PolygonMode::FILL)
-            .cull_mode(vk::CullModeFlags::NONE)
+            .cull_mode(vk::CullModeFlags::BACK)
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .line_width(1.0);
 
@@ -141,18 +142,6 @@ impl Pipeline {
         }
 
         Ok(pipeline)
-    }
-
-    fn load_shader(device: &Device, path: &str) -> Result<vk::ShaderModule, Box<dyn Error>> {
-        let bytes = std::fs::read(path)?;
-        let (prefix, code, suffix) = unsafe { bytes.align_to::<u32>() };
-        assert!(
-            prefix.is_empty() && suffix.is_empty(),
-            "SPIR-V data is misaligned"
-        );
-
-        let info = vk::ShaderModuleCreateInfo::default().code(code);
-        unsafe { Ok(device.device.create_shader_module(&info, None)?) }
     }
 
     pub fn destroy(&self, device: &Device) {

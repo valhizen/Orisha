@@ -1,18 +1,19 @@
 use std::f32::consts::PI;
 
+use glam::Vec3;
+
 use crate::gpu::buffer::Vertex;
 
-const RINGS: u32 = 40;    // horizontal segments
-const SEGMENTS: u32 = 40; // vertical segments
-const RADIUS: f32 = 900.0;
+const RINGS: u32 = 64;
+const SEGMENTS: u32 = 64;
+const RADIUS: f32 = 10.0;
 
-// Inverted hemisphere dome with sky gradient colors.
 pub fn sky_dome_geometry() -> (Vec<Vertex>, Vec<u32>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
 
     for ring in 0..=RINGS {
-        let phi = (ring as f32 / RINGS as f32) * (PI * 0.5);
+        let phi = -PI * 0.5 + (ring as f32 / RINGS as f32) * PI;
         let (sin_phi, cos_phi) = phi.sin_cos();
 
         for seg in 0..=SEGMENTS {
@@ -24,16 +25,13 @@ pub fn sky_dome_geometry() -> (Vec<Vertex>, Vec<u32>) {
             let z = cos_phi * sin_theta;
 
             let position = [x * RADIUS, y * RADIUS, z * RADIUS];
-
-            let normal = [-x, -y, -z];
-
-            let t = sin_phi;
-            let color = sky_gradient(t);
+            let normal = [x, y, z];
 
             vertices.push(Vertex {
                 position,
                 normal,
-                color,
+                color: [1.0, 1.0, 1.0],
+                uv:    [0.0, 0.0],
             });
         }
     }
@@ -59,15 +57,11 @@ pub fn sky_dome_geometry() -> (Vec<Vertex>, Vec<u32>) {
     (vertices, indices)
 }
 
-// Horizon-to-zenith color gradient.
-fn sky_gradient(t: f32) -> [f32; 3] {
-    let horizon = [0.65, 0.78, 0.92];
-    let zenith = [0.18, 0.32, 0.72];
-    let t = (t * t).clamp(0.0, 1.0);
+pub fn sun_direction(time_of_day: f32) -> Vec3 {
+    let hour_angle = (time_of_day - 12.0) / 24.0 * 2.0 * PI;
 
-    [
-        horizon[0] + (zenith[0] - horizon[0]) * t,
-        horizon[1] + (zenith[1] - horizon[1]) * t,
-        horizon[2] + (zenith[2] - horizon[2]) * t,
-    ]
+    let elevation = -hour_angle.sin();
+    let azimuth = -hour_angle.cos();
+
+    Vec3::new(azimuth, elevation, 0.3).normalize()
 }

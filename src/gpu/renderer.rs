@@ -12,37 +12,44 @@ use super::{
     descriptor::Descriptors,
     device::Device,
     pipeline::Pipeline,
+    pipeline_sky::SkyPipeline,
     swapchain::SwapChain,
     sync::FrameSync,
+    texture::GpuTexture,
 };
 
 const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
-// Owns all GPU resources and drives frame rendering.
 pub struct Renderer {
-    pub allocator: GpuAllocator,
-    pub device: Device,
-    pub swapchain: SwapChain,
-    pub commands: Commands,
-    pub sync: FrameSync,
+    pub allocator:  GpuAllocator,
+    pub device:     Device,
+    pub swapchain:  SwapChain,
+    pub commands:   Commands,
+    pub sync:       FrameSync,
     pub descriptors: Descriptors,
-    pub pipeline: Pipeline,
-    camera_ubos: Vec<GpuBuffer>,
-    depth_image: vk::Image,
-    depth_view: vk::ImageView,
-    depth_alloc: Option<Allocation>,
-    frame_index: usize,
+    pub pipeline:   Pipeline,
+    pub sky_pipeline: SkyPipeline,
+    camera_ubos:    Vec<GpuBuffer>,
+    depth_image:    vk::Image,
+    depth_view:     vk::ImageView,
+    depth_alloc:    Option<Allocation>,
+    terrain_diffuse: GpuTexture,
+    terrain_normal:  GpuTexture,
+    terrain_spec:    GpuTexture,
+    terrain_rough:   GpuTexture,
+    terrain_disp:    GpuTexture,
+    pub frame_index: usize,
 }
 
 impl Renderer {
     pub fn new(window: &winit::window::Window) -> Result<Self, Box<dyn Error>> {
         let size = window.inner_size();
 
-        let device = Device::new(window)?;
+        let device    = Device::new(window)?;
         let allocator = GpuAllocator::new(&device);
         let swapchain = SwapChain::new(&device, size.width, size.height)?;
-        let commands = Commands::new(&device)?;
-        let sync = FrameSync::new(&device, swapchain.present_images.len())?;
+        let commands  = Commands::new(&device)?;
+        let sync      = FrameSync::new(&device, swapchain.present_images.len())?;
         let descriptors = Descriptors::new(&device)?;
 
         let camera_ubos: Vec<GpuBuffer> = (0..MAX_FRAMES_IN_FLIGHT)
@@ -64,11 +71,64 @@ impl Renderer {
             std::mem::size_of::<CameraUbo>() as vk::DeviceSize,
         );
 
+        // ── Terrain textures ─────────────────────────────────────────────────
+        // Load order matters: each upload blocks until the transfer queue is
+        // idle so we serialise them naturally here at startup.
+
+        println!("Loading terrain textures (this may take a moment for 4 K assets)…");
+
+        let terrain_diffuse = GpuTexture::load_rgba8(
+            &device, &allocator, &commands,
+            "Textures/rocky_terrain_02_diff_4k.jpg",
+            true,   // sRGB — Vulkan gamma-decodes on sample → linear in shader
+        );
+        println!("  diffuse  ✓");
+
+        let terrain_normal = GpuTexture::load_rgba8(
+            &device, &allocator, &commands,
+            "Textures/rocky_terrain_02_nor_gl_4k.png",
+            false,
+        );
+        println!("  normal   ✓");
+
+        let terrain_spec = GpuTexture::load_rgba8(
+            &device, &allocator, &commands,
+            "Textures/rocky_terrain_02_spec_4k.png",
+            false,
+        );
+        println!("  specular ✓");
+
+        let terrain_rough = GpuTexture::load_rgba8(
+            &device, &allocator, &commands,
+            "Textures/rocky_terrain_02_rough_4k.png",
+            false,
+        );
+        println!("  roughness ✓");
+
+        let terrain_disp = GpuTexture::load_rgba8(
+            &device, &allocator, &commands,
+            "Textures/rocky_terrain_02_disp_4k.png",
+            false,
+        );
+        println!("  displacement ✓");
+
+        descriptors.write_texture_sets(
+            &device,
+            &terrain_diffuse,
+            &terrain_normal,
+            &terrain_spec,
+            &terrain_rough,
+            &terrain_disp,
+        );
+
         let (depth_image, depth_view, depth_alloc) =
             Self::create_depth(&device, &allocator, size.width, size.height);
 
         let pipeline =
             Pipeline::new(&device, &swapchain, descriptors.camera_layout, DEPTH_FORMAT)?;
+
+        let sky_pipeline =
+            SkyPipeline::new(&device, &swapchain, descriptors.camera_layout, DEPTH_FORMAT)?;
 
         Ok(Self {
             allocator,
@@ -78,10 +138,16 @@ impl Renderer {
             sync,
             descriptors,
             pipeline,
+            sky_pipeline,
             camera_ubos,
             depth_image,
             depth_view,
             depth_alloc: Some(depth_alloc),
+            terrain_diffuse,
+            terrain_normal,
+            terrain_spec,
+            terrain_rough,
+            terrain_disp,
             frame_index: 0,
         })
     }
@@ -392,8 +458,15 @@ impl Drop for Renderer {
         unsafe { self.device.device.device_wait_idle().unwrap() };
 
         self.pipeline.destroy(&self.device);
+        self.sky_pipeline.destroy(&self.device);
         self.sync.destroy(&self.device);
         self.descriptors.destroy(&self.device);
+
+        self.terrain_diffuse.cleanup(&self.device, &self.allocator);
+        self.terrain_normal .cleanup(&self.device, &self.allocator);
+        self.terrain_spec   .cleanup(&self.device, &self.allocator);
+        self.terrain_rough  .cleanup(&self.device, &self.allocator);
+        self.terrain_disp   .cleanup(&self.device, &self.allocator);
 
         unsafe {
             self.device.device.destroy_image_view(self.depth_view, None);

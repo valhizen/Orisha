@@ -4,46 +4,83 @@ use std::error::Error;
 use super::buffer::GpuBuffer;
 use super::commands::MAX_FRAMES_IN_FLIGHT;
 use super::device::Device;
+use super::texture::GpuTexture;
 
-// Descriptor pool, layout, and per-frame sets for camera UBO.
 pub struct Descriptors {
-    pub pool: vk::DescriptorPool,
-    pub camera_layout: vk::DescriptorSetLayout,
-    pub camera_sets: [vk::DescriptorSet; MAX_FRAMES_IN_FLIGHT],
+    pub pool:           vk::DescriptorPool,
+    pub camera_layout:  vk::DescriptorSetLayout,
+    pub camera_sets:    [vk::DescriptorSet; MAX_FRAMES_IN_FLIGHT],
 }
 
 impl Descriptors {
     pub fn new(device: &Device) -> Result<Self, Box<dyn Error>> {
         unsafe {
-            let binding = vk::DescriptorSetLayoutBinding::default()
-                .binding(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
 
-            let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
-                .bindings(std::slice::from_ref(&binding));
+            let bindings = [
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .descriptor_count(1)
+                    .stage_flags(
+                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                    ),
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(1)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(2)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(3)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(4)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(5)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            ];
+
+            let layout_info =
+                vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
 
             let camera_layout = device
                 .device
                 .create_descriptor_set_layout(&layout_info, None)?;
 
-            let pool_size = vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::UNIFORM_BUFFER)
-                .descriptor_count(MAX_FRAMES_IN_FLIGHT as u32);
+
+            let pool_sizes = [
+                vk::DescriptorPoolSize::default()
+                    .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                    .descriptor_count(MAX_FRAMES_IN_FLIGHT as u32),
+                vk::DescriptorPoolSize::default()
+                    .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_count(5 * MAX_FRAMES_IN_FLIGHT as u32),
+            ];
 
             let pool_info = vk::DescriptorPoolCreateInfo::default()
                 .max_sets(MAX_FRAMES_IN_FLIGHT as u32)
-                .pool_sizes(std::slice::from_ref(&pool_size));
+                .pool_sizes(&pool_sizes);
 
             let pool = device.device.create_descriptor_pool(&pool_info, None)?;
 
-            let layouts = [camera_layout; MAX_FRAMES_IN_FLIGHT];
+
+            let layouts    = [camera_layout; MAX_FRAMES_IN_FLIGHT];
             let alloc_info = vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(pool)
                 .set_layouts(&layouts);
 
-            let sets_vec = device.device.allocate_descriptor_sets(&alloc_info)?;
+            let sets_vec   = device.device.allocate_descriptor_sets(&alloc_info)?;
             let camera_sets: [vk::DescriptorSet; MAX_FRAMES_IN_FLIGHT] =
                 sets_vec.try_into().unwrap();
 
@@ -57,9 +94,9 @@ impl Descriptors {
 
     pub fn write_camera_sets(
         &self,
-        device: &Device,
+        device:    &Device,
         camera_ubos: &[GpuBuffer],
-        ubo_size: vk::DeviceSize,
+        ubo_size:  vk::DeviceSize,
     ) {
         for i in 0..MAX_FRAMES_IN_FLIGHT {
             let buffer_info = vk::DescriptorBufferInfo::default()
@@ -75,6 +112,75 @@ impl Descriptors {
 
             unsafe {
                 device.device.update_descriptor_sets(&[write], &[]);
+            }
+        }
+    }
+
+    pub fn write_texture_sets(
+        &self,
+        device:    &Device,
+        diffuse:   &GpuTexture,
+        normal:    &GpuTexture,
+        spec:      &GpuTexture,
+        roughness: &GpuTexture,
+        displace:  &GpuTexture,
+    ) {
+        for i in 0..MAX_FRAMES_IN_FLIGHT {
+            let diff_info = vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(diffuse.view)
+                .sampler(diffuse.sampler);
+
+            let norm_info = vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(normal.view)
+                .sampler(normal.sampler);
+
+            let spec_info = vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(spec.view)
+                .sampler(spec.sampler);
+
+            let rough_info = vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(roughness.view)
+                .sampler(roughness.sampler);
+
+            let disp_info = vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(displace.view)
+                .sampler(displace.sampler);
+
+            let writes = [
+                vk::WriteDescriptorSet::default()
+                    .dst_set(self.camera_sets[i])
+                    .dst_binding(1)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&diff_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(self.camera_sets[i])
+                    .dst_binding(2)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&norm_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(self.camera_sets[i])
+                    .dst_binding(3)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&spec_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(self.camera_sets[i])
+                    .dst_binding(4)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&rough_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(self.camera_sets[i])
+                    .dst_binding(5)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&disp_info)),
+            ];
+
+            unsafe {
+                device.device.update_descriptor_sets(&writes, &[]);
             }
         }
     }

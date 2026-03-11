@@ -5,7 +5,6 @@ use super::device::Device;
 
 pub const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
-// Command pool and buffers for drawing and one-shot uploads.
 pub struct Commands {
     pub pool: vk::CommandPool,
     pub draw_buffers: [vk::CommandBuffer; MAX_FRAMES_IN_FLIGHT],
@@ -39,7 +38,6 @@ impl Commands {
         }
     }
 
-    // Record and submit a one-shot command, blocking until done.
     pub fn run_one_time<F>(&self, device: &Device, f: F)
     where
         F: FnOnce(&ash::Device, vk::CommandBuffer),

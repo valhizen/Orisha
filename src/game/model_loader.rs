@@ -77,6 +77,7 @@ fn collect_node(
                     position: [wp.x, wp.y, wp.z],
                     normal: wn3.into(),
                     color,
+                    uv: [0.0, 0.0],
                 });
             }
 

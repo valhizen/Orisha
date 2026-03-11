@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::gpu::{
     allocator::GpuAllocator,
@@ -9,24 +9,23 @@ use crate::gpu::{
 
 use super::world_generation::{self, ChunkCoord, Terrain};
 
-// Chunk load radius around the player.
-const VIEW_RADIUS: i32 = 500;
+const VIEW_RADIUS: i32 = 8;
 
 const MAX_CHUNKS_PER_FRAME: usize = 1;
 
-// Frames before a retired mesh is destroyed.
 const GRAVEYARD_DELAY: u64 = (MAX_FRAMES_IN_FLIGHT as u64) + 1;
 
 struct LoadedChunk {
     mesh: GpuMesh,
+    water_mesh: Option<GpuMesh>,
 }
 
 struct GraveyardEntry {
     mesh: GpuMesh,
+    water_mesh: Option<GpuMesh>,
     retired_frame: u64,
 }
 
-// Streams terrain chunks around the player.
 pub struct ChunkManager {
     chunks: HashMap<ChunkCoord, LoadedChunk>,
     last_centre: Option<ChunkCoord>,
@@ -48,8 +47,8 @@ impl ChunkManager {
 
     pub fn update(
         &mut self,
-        player_x: f32,
-        player_z: f32,
+        center_x: f32,
+        center_z: f32,
         terrain: &Terrain,
         device: &Device,
         allocator: &GpuAllocator,
@@ -61,34 +60,33 @@ impl ChunkManager {
             if self.frame - front.retired_frame >= GRAVEYARD_DELAY {
                 let entry = self.graveyard.pop_front().unwrap();
                 entry.mesh.destroy(device, allocator);
+                if let Some(wm) = entry.water_mesh {
+                    wm.destroy(device, allocator);
+                }
             } else {
                 break;
             }
         }
 
-        let centre = ChunkCoord::from_world(player_x, player_z);
+        let centre = ChunkCoord::from_world(center_x, center_z);
 
-        // Recalculate when the player crosses a chunk boundary.
         if self.last_centre != Some(centre) {
             self.last_centre = Some(centre);
 
-            let mut desired: HashMap<ChunkCoord, ()> = HashMap::new();
+            let mut desired = HashSet::new();
             for dz in -VIEW_RADIUS..=VIEW_RADIUS {
                 for dx in -VIEW_RADIUS..=VIEW_RADIUS {
-                    desired.insert(
-                        ChunkCoord {
-                            x: centre.x + dx,
-                            z: centre.z + dz,
-                        },
-                        (),
-                    );
+                    desired.insert(ChunkCoord {
+                        x: centre.x + dx,
+                        z: centre.z + dz,
+                    });
                 }
             }
 
             let to_remove: Vec<ChunkCoord> = self
                 .chunks
                 .keys()
-                .filter(|c| !desired.contains_key(c))
+                .filter(|c| !desired.contains(c))
                 .copied()
                 .collect();
 
@@ -96,14 +94,14 @@ impl ChunkManager {
                 if let Some(chunk) = self.chunks.remove(&coord) {
                     self.graveyard.push_back(GraveyardEntry {
                         mesh: chunk.mesh,
+                        water_mesh: chunk.water_mesh,
                         retired_frame: self.frame,
                     });
                 }
             }
 
-            // Queue pending chunks, closest first.
             self.pending.clear();
-            for &coord in desired.keys() {
+            for &coord in &desired {
                 if !self.chunks.contains_key(&coord) {
                     self.pending.push(coord);
                 }
@@ -111,17 +109,23 @@ impl ChunkManager {
             self.pending.sort_by_key(|c| {
                 let dx = c.x - centre.x;
                 let dz = c.z - centre.z;
-                dx * dx + dz * dz
+                std::cmp::Reverse(dx * dx + dz * dz)
             });
         }
 
         let to_gen = self.pending.len().min(MAX_CHUNKS_PER_FRAME);
         for _ in 0..to_gen {
-            let coord = self.pending.remove(0);
+            let Some(coord) = self.pending.pop() else { break };
             if !self.chunks.contains_key(&coord) {
-                let (verts, idxs) = world_generation::build_chunk_mesh(terrain, coord);
+                let (verts, idxs, w_verts, w_idxs) =
+                    world_generation::build_chunk_mesh(terrain, coord);
                 let mesh = GpuMesh::upload(device, allocator, commands, &verts, &idxs);
-                self.chunks.insert(coord, LoadedChunk { mesh });
+                let water_mesh = if !w_verts.is_empty() {
+                    Some(GpuMesh::upload(device, allocator, commands, &w_verts, &w_idxs))
+                } else {
+                    None
+                };
+                self.chunks.insert(coord, LoadedChunk { mesh, water_mesh });
             }
         }
     }
@@ -130,12 +134,22 @@ impl ChunkManager {
         self.chunks.values().map(|c| &c.mesh)
     }
 
+    pub fn water_meshes(&self) -> impl Iterator<Item = &GpuMesh> {
+        self.chunks.values().filter_map(|c| c.water_mesh.as_ref())
+    }
+
     pub fn destroy_all(&mut self, device: &Device, allocator: &GpuAllocator) {
         for (_, chunk) in self.chunks.drain() {
             chunk.mesh.destroy(device, allocator);
+            if let Some(wm) = chunk.water_mesh {
+                wm.destroy(device, allocator);
+            }
         }
         for entry in self.graveyard.drain(..) {
             entry.mesh.destroy(device, allocator);
+            if let Some(wm) = entry.water_mesh {
+                wm.destroy(device, allocator);
+            }
         }
     }
 }

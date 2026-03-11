@@ -3,7 +3,6 @@ use std::error::Error;
 
 use super::device::Device;
 
-// Vulkan swapchain and its image views.
 pub struct SwapChain {
     pub swapchain_loader: swapchain::Device,
     pub swapchain: vk::SwapchainKHR,
@@ -39,18 +38,18 @@ impl SwapChain {
     ) -> Result<(), Box<dyn Error>> {
         unsafe { device.device.device_wait_idle()? };
 
-        for &view in &self.present_image_views {
-            unsafe { device.device.destroy_image_view(view, None) };
-        }
-
         let old = self.swapchain;
         let (loader, swapchain, format, resolution) =
             Self::create_swapchain(device, width, height, old)?;
 
-        unsafe { loader.destroy_swapchain(old, None) };
+         let images = unsafe { loader.get_swapchain_images(swapchain)? };
+         let views = Self::create_image_views(device, &images, format.format);
 
-        let images = unsafe { loader.get_swapchain_images(swapchain)? };
-        let views = Self::create_image_views(device, &images, format.format);
+         for &view in &self.present_image_views {
+                          unsafe { device.device.destroy_image_view(view, None) };
+                      }
+
+        unsafe { loader.destroy_swapchain(old, None) };
 
         self.swapchain_loader = loader;
         self.swapchain = swapchain;
@@ -77,13 +76,22 @@ impl SwapChain {
         Box<dyn Error>,
     > {
         unsafe {
-            let format = device
+            let formats = device
                 .surface_loader
-                .get_physical_device_surface_formats(device.pdevice, device.surface)?[0];
+                .get_physical_device_surface_formats(device.pdevice, device.surface)?;
+
+            let format = formats
+                .iter()
+                .copied()
+                .find(|f| {
+                    f.format == vk::Format::B8G8R8A8_SRGB
+                        && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
+                })
+                .unwrap_or(formats[0]);
 
             let caps = device
-                .surface_loader
-                .get_physical_device_surface_capabilities(device.pdevice, device.surface)?;
+            .surface_loader
+            .get_physical_device_surface_capabilities(device.pdevice, device.surface)?;
 
             let mut image_count = caps.min_image_count + 1;
             if caps.max_image_count > 0 && image_count > caps.max_image_count {

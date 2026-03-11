@@ -5,7 +5,6 @@ use crate::gpu::buffer::Vertex;
 use super::physics::{self, Capsule, CollisionResult};
 use super::world_generation::Terrain;
 
-// Player state and movement.
 pub struct Player {
     pub position: Vec3,
     pub rotation: Quat,
@@ -39,7 +38,7 @@ impl Player {
         }
     }
 
-    pub fn move_direction(&mut self, direction: Vec3, _delta_time: f32, sprinting: bool) {
+    pub fn move_direction(&mut self, direction: Vec3, sprinting: bool) {
         if direction.length_squared() > 0.0 {
             let speed = if sprinting {
                 self.movement_speed * self.sprint_multiplier
@@ -52,7 +51,7 @@ impl Player {
             self.velocity.z = movement.z;
 
             if movement.length_squared() > 0.01 {
-                self.rotation = Quat::from_rotation_y((-movement.z).atan2(movement.x));
+                self.rotation = Quat::from_rotation_y(movement.x.atan2(movement.z));
             }
         } else {
             self.velocity.x *= 0.8;
@@ -90,7 +89,6 @@ impl Player {
     }
 }
 
-// Simple colored box mesh for the player.
 pub fn player_geometry() -> (Vec<Vertex>, Vec<u32>) {
     let hw = 0.5;
     let hh = 1.0;
@@ -115,6 +113,7 @@ pub fn player_geometry() -> (Vec<Vertex>, Vec<u32>) {
                 position: pos,
                 normal: *normal,
                 color: *color,
+                uv: [0.0, 0.0],
             });
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);

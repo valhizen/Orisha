@@ -4,7 +4,6 @@ use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, Allocat
 
 use super::device::Device;
 
-// Thread-safe GPU memory allocator.
 pub struct GpuAllocator {
     inner: Mutex<Allocator>,
 }
@@ -16,7 +15,7 @@ impl GpuAllocator {
             device: device.device.clone(),
             physical_device: device.pdevice,
             debug_settings: Default::default(),
-            buffer_device_address: false,
+            buffer_device_address: true,
             allocation_sizes: Default::default(),
         })
         .expect("Failed to create GPU memory allocator");

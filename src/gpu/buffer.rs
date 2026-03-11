@@ -6,13 +6,13 @@ use gpu_allocator::{
 
 use super::{allocator::GpuAllocator, commands::Commands, device::Device};
 
-// Per-vertex data sent to the GPU.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
     pub position: [f32; 3],
-    pub normal: [f32; 3],
-    pub color: [f32; 3],
+    pub normal:   [f32; 3],
+    pub color:    [f32; 3],
+    pub uv:       [f32; 2],  // world-space tiled UVs (location 3)
 }
 
 impl Vertex {
@@ -23,7 +23,7 @@ impl Vertex {
             .input_rate(vk::VertexInputRate::VERTEX)
     }
 
-    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
+    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 4] {
         [
             vk::VertexInputAttributeDescription::default()
                 .binding(0)
@@ -40,26 +40,41 @@ impl Vertex {
                 .location(2)
                 .format(vk::Format::R32G32B32_SFLOAT)
                 .offset(24),
+            vk::VertexInputAttributeDescription::default()
+                .binding(0)
+                .location(3)
+                .format(vk::Format::R32G32_SFLOAT)
+                .offset(36),
         ]
     }
 }
 
-// Camera view/projection uniform buffer.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CameraUbo {
-    pub view: [[f32; 4]; 4],
-    pub proj: [[f32; 4]; 4],
+    pub view:    [[f32; 4]; 4],
+    pub proj:    [[f32; 4]; 4],
+    pub cam_pos: [f32; 4],
 }
 
-// Per-object model matrix push constant.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PushConstants {
-    pub model: [[f32; 4]; 4],
+    pub model:     [[f32; 4]; 4],
+    pub tex_blend: f32,
+    pub time:      f32,
 }
 
-// Vulkan buffer with gpu-allocator backing.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SkyPushConstants {
+    pub sun_dir:     [f32; 4],
+    pub time_of_day: f32,
+    pub _pad0:       f32,
+    pub _pad1:       f32,
+    pub _pad2:       f32,
+}
+
 pub struct GpuBuffer {
     pub buffer: vk::Buffer,
     pub allocation: Option<Allocation>,
@@ -105,7 +120,6 @@ impl GpuBuffer {
         }
     }
 
-    // Write to a host-visible mapped buffer.
     pub fn write<T: bytemuck::NoUninit>(&self, data: &T) {
         let alloc = self.allocation.as_ref().expect("Buffer already destroyed");
         let ptr = alloc.mapped_ptr().expect("Buffer not mapped");
@@ -118,7 +132,6 @@ impl GpuBuffer {
         }
     }
 
-    // Upload data to device-local memory via a staging buffer.
     pub fn device_local(
         device: &Device,
         allocator: &GpuAllocator,
@@ -176,7 +189,6 @@ impl GpuBuffer {
     }
 }
 
-// Vertex + index buffers ready for indexed draw calls.
 pub struct GpuMesh {
     pub vertex_buffer: GpuBuffer,
     pub index_buffer: GpuBuffer,

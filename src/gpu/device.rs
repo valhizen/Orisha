@@ -27,7 +27,6 @@ unsafe extern "system" fn vulkan_debug_callback(
     }
 }
 
-// Score a physical device; returns -1 if unsuitable.
 fn score_device(
     instance: &Instance,
     pdevice: vk::PhysicalDevice,
@@ -84,7 +83,6 @@ fn score_device(
     }
 }
 
-// Vulkan instance, device, surface, and debug setup.
 pub struct Device {
     pub entry: Entry,
     pub instance: Instance,
@@ -115,6 +113,14 @@ impl Device {
                     .to_vec();
             extension_names.push(debug_utils::NAME.as_ptr());
 
+
+
+                        #[cfg(any(target_os = "macos", target_os = "ios"))]
+                        {
+                            extension_names.push(ash::khr::portability_enumeration::NAME.as_ptr());
+                            extension_names.push(ash::khr::get_physical_device_properties2::NAME.as_ptr());
+                        }
+
             let app_info = vk::ApplicationInfo::default()
                 .application_name(app_name)
                 .application_version(vk::make_api_version(0, 1, 0, 0))
@@ -122,12 +128,19 @@ impl Device {
                 .engine_version(vk::make_api_version(0, 1, 0, 0))
                 .api_version(vk::API_VERSION_1_3);
 
+            let create_flags = if cfg!(any(target_os = "macos", target_os = "ios")) {
+                       vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR
+                   } else {
+                       vk::InstanceCreateFlags::default()
+                   };
+
             let instance_info = vk::InstanceCreateInfo::default()
                 .application_info(&app_info)
                 .enabled_layer_names(&layers_raw)
-                .enabled_extension_names(&extension_names);
+                .enabled_extension_names(&extension_names)
+                .flags(create_flags);
 
-            let instance = entry.create_instance(&instance_info, None)?;
+            let instance = entry.create_instance(&instance_info, None).expect("Create Instance Error!");
 
             let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
                 .message_severity(
@@ -143,9 +156,10 @@ impl Device {
 
             let debug_utils_loader = debug_utils::Instance::new(&entry, &instance);
             let debug_call_back = debug_utils_loader
-                .create_debug_utils_messenger(&debug_info, None)?;
+                .create_debug_utils_messenger(&debug_info, None).unwrap();
 
             let surface_loader = surface::Instance::new(&entry, &instance);
+
             let surface = ash_window::create_surface(
                 &entry,
                 &instance,
@@ -195,12 +209,20 @@ impl Device {
 
             let device_extensions = [ash::khr::swapchain::NAME.as_ptr()];
 
+            let mut features_12 = vk::PhysicalDeviceVulkan12Features::default()
+                .buffer_device_address(true);
+
             let mut features_13 = vk::PhysicalDeviceVulkan13Features::default()
                 .dynamic_rendering(true)
                 .synchronization2(true);
 
+            let features = vk::PhysicalDeviceFeatures::default()
+                .sampler_anisotropy(true);
+
             let device_info = vk::DeviceCreateInfo::default()
+                .push_next(&mut features_12)
                 .push_next(&mut features_13)
+                .enabled_features(&features)
                 .queue_create_infos(std::slice::from_ref(&queue_info))
                 .enabled_extension_names(&device_extensions);
 

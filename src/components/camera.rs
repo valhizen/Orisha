@@ -6,7 +6,6 @@ pub enum CameraMode {
     Free,
 }
 
-// Third-person / first-person / free camera.
 pub struct Camera {
     pub position: Vec3,
     pub rotation: Quat,
@@ -95,7 +94,8 @@ impl Camera {
     pub fn rotate(&mut self, delta_x: f32, delta_y: f32) {
         self.yaw -= delta_x * self.sensitivity;
         self.pitch = (self.pitch - delta_y * self.sensitivity)
-            .clamp(-60.0_f32.to_radians(), 60.0_f32.to_radians());
+            .clamp(-89.0_f32.to_radians(), 89.0_f32.to_radians());
+        self.rotation = Quat::from_rotation_y(self.yaw) * Quat::from_rotation_x(self.pitch);
     }
 
     pub fn zoom(&mut self, delta: f32) {
@@ -115,7 +115,6 @@ impl Camera {
         }
     }
 
-    // Projection with Vulkan Y-flip.
     pub fn projection_matrix(&self, aspect_ratio: f32) -> Mat4 {
         let mut proj = Mat4::perspective_rh(
             self.fov,

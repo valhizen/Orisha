@@ -8,7 +8,6 @@ const GROUND_STICK_THRESHOLD: f32 = 0.08;
 const SLOPE_LIMIT_COS: f32 = 0.5;
 const SLIDE_FORCE: f32 = 12.0;
 
-// Vertical capsule collider.
 #[derive(Clone, Copy, Debug)]
 pub struct Capsule {
     pub half_height: f32,
@@ -28,7 +27,6 @@ impl Capsule {
     }
 }
 
-// Result of terrain collision resolution.
 #[derive(Clone, Copy, Debug)]
 pub struct CollisionResult {
     pub position: Vec3,
@@ -37,7 +35,6 @@ pub struct CollisionResult {
     pub ground_normal: Vec3,
 }
 
-// One physics step: gravity, integration, terrain collision.
 pub fn step(
     position: Vec3,
     velocity: Vec3,

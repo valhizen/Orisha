@@ -3,7 +3,6 @@ use std::error::Error;
 
 use super::{commands::MAX_FRAMES_IN_FLIGHT, device::Device};
 
-// Semaphores and fences for frame synchronization.
 pub struct FrameSync {
     pub image_available: [vk::Semaphore; MAX_FRAMES_IN_FLIGHT],
     pub render_finished: Vec<vk::Semaphore>,
