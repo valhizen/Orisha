@@ -15,14 +15,14 @@ mod gpu;
 
 use components::camera::Camera;
 use game::chunk_manager::ChunkManager;
-use game::player::{self, Player};
+use game::model_loader;
+use game::player::Player;
 use game::sky;
 use game::time::GameClock;
 use game::world_generation::Terrain;
 use gpu::buffer::{CameraUbo, GpuMesh, PushConstants};
 use gpu::renderer::Renderer;
 
-// Main application state.
 struct App {
     sky_mesh: Option<GpuMesh>,
     cube_mesh: Option<GpuMesh>,
@@ -34,6 +34,7 @@ struct App {
     camera: Option<Camera>,
     clock: Option<GameClock>,
     terrain: Option<Terrain>,
+    model_y_offset: f32,
     keys_pressed: HashSet<KeyCode>,
 }
 
@@ -49,6 +50,7 @@ impl App {
             camera: None,
             clock: None,
             terrain: None,
+            model_y_offset: 0.0,
             keys_pressed: HashSet::new(),
         }
     }
@@ -62,7 +64,7 @@ impl ApplicationHandler for App {
 
         let renderer = Renderer::new(&window).expect("Failed to initialize Vulkan renderer");
 
-        let (vertices, indices) = player::player_geometry();
+        let (vertices, indices, model_y_offset) = model_loader::load_glb("character/characte2.glb");
         let mesh = GpuMesh::upload(
             &renderer.device,
             &renderer.allocator,
@@ -70,6 +72,7 @@ impl ApplicationHandler for App {
             &vertices,
             &indices,
         );
+        self.model_y_offset = model_y_offset;
 
         let (sky_verts, sky_idxs) = sky::sky_dome_geometry();
         let sky_gpu = GpuMesh::upload(
@@ -212,7 +215,9 @@ impl ApplicationHandler for App {
                     };
 
                     let player_push = PushConstants {
-                        model: Mat4::from_translation(player.position).to_cols_array_2d(),
+                        model: (Mat4::from_translation(player.position)
+                            * Mat4::from_translation(Vec3::new(0.0, self.model_y_offset, 0.0)))
+                            .to_cols_array_2d(),
                     };
 
                     let terrain_push = PushConstants {

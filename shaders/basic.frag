@@ -15,7 +15,8 @@ void main() {
     vec3 lightDir = normalize(vec3(1.0, 1.0, 0.5));
     vec3 normal = normalize(fragNormal);
 
-    float diffuse = max(dot(normal, lightDir), 0.0);
+    // Two-sided lighting: handles models with inverted normals on mirrored geometry.
+    float diffuse = abs(dot(normal, lightDir));
     float ambient = 0.15;
 
     vec3 color = fragColor * (ambient + diffuse);

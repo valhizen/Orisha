@@ -8,6 +8,7 @@ ash = { version = "0.38.0", features = ["debug", "default", "linked", "loaded", 
 ash-window = "0.13.0"
 bytemuck = { version = "1", features = ["derive"] }
 glam = "0.32.1"
+gltf = "1"
 gpu-allocator = { version = "0.28.0", features = ["vulkan"] }
 noise = "0.9.0"
 winit = { version = "0.30.13", features = ["x11"] }

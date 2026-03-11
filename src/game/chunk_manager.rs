@@ -12,7 +12,6 @@ use super::world_generation::{self, ChunkCoord, Terrain};
 // Chunk load radius around the player.
 const VIEW_RADIUS: i32 = 500;
 
-// Max new chunks to generate per frame.
 const MAX_CHUNKS_PER_FRAME: usize = 1;
 
 // Frames before a retired mesh is destroyed.
@@ -58,7 +57,6 @@ impl ChunkManager {
     ) {
         self.frame += 1;
 
-        // Flush graveyard.
         while let Some(front) = self.graveyard.front() {
             if self.frame - front.retired_frame >= GRAVEYARD_DELAY {
                 let entry = self.graveyard.pop_front().unwrap();
@@ -87,7 +85,6 @@ impl ChunkManager {
                 }
             }
 
-            // Retire far chunks.
             let to_remove: Vec<ChunkCoord> = self
                 .chunks
                 .keys()
@@ -118,7 +115,6 @@ impl ChunkManager {
             });
         }
 
-        // Generate pending chunks.
         let to_gen = self.pending.len().min(MAX_CHUNKS_PER_FRAME);
         for _ in 0..to_gen {
             let coord = self.pending.remove(0);
