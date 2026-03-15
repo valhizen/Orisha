@@ -1,18 +1,22 @@
 use ash::vk;
 use std::error::Error;
 
+// Graphics pipeline used only for rendering the sky dome.
 use super::buffer::{SkyPushConstants, Vertex};
 use super::device::Device;
 use super::swapchain::SwapChain;
 use super::utils::load_shader;
 
-
+/// Holds the Vulkan pipeline object and its layout for sky rendering.
 pub struct SkyPipeline {
     pub pipeline_layout: vk::PipelineLayout,
     pub pipeline: vk::Pipeline,
 }
 
 impl SkyPipeline {
+    /// Creates the sky pipeline in two steps:
+    /// 1. create the layout
+    /// 2. create the graphics pipeline
     pub fn new(
         device: &Device,
         swapchain: &SwapChain,
@@ -27,6 +31,10 @@ impl SkyPipeline {
         })
     }
 
+    /// Creates the pipeline layout for the sky shaders.
+    ///
+    /// The layout tells Vulkan which descriptor sets and push constants
+    /// the shaders expect.
     fn create_layout(
         device: &Device,
         camera_layout: vk::DescriptorSetLayout,
@@ -36,6 +44,8 @@ impl SkyPipeline {
             .offset(0)
             .size(std::mem::size_of::<SkyPushConstants>() as u32);
 
+        // The sky pipeline uses the same camera descriptor set layout
+        // as the main world pipeline.
         let set_layouts = [camera_layout];
 
         let info = vk::PipelineLayoutCreateInfo::default()
@@ -45,12 +55,17 @@ impl SkyPipeline {
         unsafe { Ok(device.device.create_pipeline_layout(&info, None)?) }
     }
 
+    /// Creates the actual sky graphics pipeline.
+    ///
+    /// This combines shader stages, vertex layout, depth rules,
+    /// rasterization settings, and dynamic rendering info.
     fn create_pipeline(
         device: &Device,
         swapchain: &SwapChain,
         layout: vk::PipelineLayout,
         depth_format: vk::Format,
     ) -> Result<vk::Pipeline, Box<dyn Error>> {
+        // Load the compiled sky shaders.
         let vert = load_shader(device, "shaders/compiled/sky_vert.spv")?;
         let frag = load_shader(device, "shaders/compiled/sky_frag.spv")?;
 
@@ -66,6 +81,7 @@ impl SkyPipeline {
                 .name(entry),
         ];
 
+        // The sky uses the same vertex format as other meshes.
         let binding = Vertex::binding_description();
         let attributes = Vertex::attribute_descriptions();
         let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
@@ -75,6 +91,7 @@ impl SkyPipeline {
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
 
+        // Viewport and scissor are set later while recording commands.
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
         let dynamic_state =
             vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
@@ -83,6 +100,7 @@ impl SkyPipeline {
             .viewport_count(1)
             .scissor_count(1);
 
+        // No face culling, because we render the inside of the sky dome.
         let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
             .polygon_mode(vk::PolygonMode::FILL)
             .cull_mode(vk::CullModeFlags::NONE)
@@ -92,6 +110,8 @@ impl SkyPipeline {
         let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
+        // The sky should appear behind the world, so it does depth testing
+        // but does not write depth.
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(true)
             .depth_write_enable(false)
@@ -99,6 +119,7 @@ impl SkyPipeline {
             .min_depth_bounds(0.0)
             .max_depth_bounds(1.0);
 
+        // No blending is needed for the sky pass.
         let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
             .blend_enable(false)
             .color_write_mask(
@@ -111,6 +132,7 @@ impl SkyPipeline {
         let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
             .attachments(std::slice::from_ref(&blend_attachment));
 
+        // This project uses dynamic rendering instead of a classic render pass.
         let color_formats = [swapchain.surface_format.format];
         let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(&color_formats)
@@ -136,6 +158,7 @@ impl SkyPipeline {
                 .map_err(|e| e.1)?[0]
         };
 
+        // Shader modules are no longer needed after pipeline creation.
         unsafe {
             device.device.destroy_shader_module(vert, None);
             device.device.destroy_shader_module(frag, None);
@@ -144,6 +167,7 @@ impl SkyPipeline {
         Ok(pipeline)
     }
 
+    /// Destroys the sky pipeline and its layout.
     pub fn destroy(&self, device: &Device) {
         unsafe {
             device.device.destroy_pipeline(self.pipeline, None);

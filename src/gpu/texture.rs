@@ -6,7 +6,7 @@ use gpu_allocator::{
 
 use super::{allocator::GpuAllocator, buffer::GpuBuffer, commands::Commands, device::Device};
 
-
+/// Owns a GPU image, its image view, and the sampler used to read it in shaders.
 pub struct GpuTexture {
     pub image:   vk::Image,
     pub view:    vk::ImageView,
@@ -16,6 +16,10 @@ pub struct GpuTexture {
 
 impl GpuTexture {
 
+    /// Load a regular image file, convert it to RGBA8, and upload it to the GPU.
+    ///
+    /// Use `srgb = true` for color textures such as albedo/diffuse maps.
+    /// Use `srgb = false` for data textures such as normals or roughness maps.
     pub fn load_rgba8(
         device:   &Device,
         allocator: &GpuAllocator,
@@ -35,6 +39,10 @@ impl GpuTexture {
         Self::from_rgba8_pixels(device, allocator, commands, rgba.as_raw(), w, h, format)
     }
 
+    /// Load an EXR image, convert it to RGBA8, and upload it to the GPU.
+    ///
+    /// This is useful when an HDR-style source exists, but the current renderer
+    /// still wants an 8-bit texture format on the GPU.
     pub fn load_exr_as_rgba8(
         device:   &Device,
         allocator: &GpuAllocator,
@@ -72,6 +80,7 @@ impl GpuTexture {
         )
     }
 
+    /// Create a tiny fallback texture containing one white pixel.
     pub fn white_1x1(device: &Device, allocator: &GpuAllocator, commands: &Commands) -> Self {
         Self::from_rgba8_pixels(
             device, allocator, commands,
@@ -81,7 +90,7 @@ impl GpuTexture {
         )
     }
 
-
+    /// Free the Vulkan objects owned by this texture.
     pub fn cleanup(&mut self, device: &Device, allocator: &GpuAllocator) {
         unsafe {
             device.device.destroy_sampler(self.sampler, None);
@@ -93,11 +102,20 @@ impl GpuTexture {
         }
     }
 
+    /// Consuming version of `cleanup`, useful when ownership is being moved out.
     pub fn destroy(mut self, device: &Device, allocator: &GpuAllocator) {
         self.cleanup(device, allocator);
     }
 
 
+    /// Create a GPU texture from already-prepared RGBA8 pixel data.
+    ///
+    /// The upload flow is:
+    /// 1. create the final GPU image
+    /// 2. create a CPU-visible staging buffer
+    /// 3. copy CPU pixels into the staging buffer
+    /// 4. record a one-time copy from buffer -> image
+    /// 5. create the image view and sampler
     fn from_rgba8_pixels(
         device:   &Device,
         allocator: &GpuAllocator,
@@ -108,6 +126,7 @@ impl GpuTexture {
         format:   vk::Format,
     ) -> Self {
         unsafe {
+            // Create the final Vulkan image that shaders will sample from.
             let image_info = vk::ImageCreateInfo::default()
                 .image_type(vk::ImageType::TYPE_2D)
                 .format(format)
@@ -125,6 +144,7 @@ impl GpuTexture {
             let image = device.device.create_image(&image_info, None).unwrap();
             let requirements = device.device.get_image_memory_requirements(image);
 
+            // Allocate GPU-only memory for the image and bind it.
             let allocation = allocator.allocate(&AllocationCreateDesc {
                 name:              "texture_image",
                 requirements,
@@ -138,6 +158,8 @@ impl GpuTexture {
                 .bind_image_memory(image, allocation.memory(), allocation.offset())
                 .unwrap();
 
+
+            // Create a staging buffer so CPU pixel data can be copied to the GPU.
             let staging = GpuBuffer::new(
                 device,
                 allocator,
@@ -147,6 +169,7 @@ impl GpuTexture {
                 "texture_staging",
             );
 
+            // Write the raw pixel bytes into the mapped staging buffer.
             if let Some(alloc) = &staging.allocation {
                 if let Some(ptr) = alloc.mapped_ptr() {
                     std::ptr::copy_nonoverlapping(
@@ -160,6 +183,7 @@ impl GpuTexture {
             let subresource = Self::full_subresource();
 
             commands.run_one_time(device, |dev, cmd| {
+                // Transition the image so it can receive copied data.
                 let to_transfer = vk::ImageMemoryBarrier::default()
                     .src_access_mask(vk::AccessFlags::empty())
                     .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
@@ -176,7 +200,7 @@ impl GpuTexture {
                     &[], &[], &[to_transfer],
                 );
 
-                // Buffer → Image copy
+                // Copy staging buffer bytes into the image.
                 let region = vk::BufferImageCopy::default()
                     .buffer_offset(0)
                     .buffer_row_length(0)
@@ -198,6 +222,7 @@ impl GpuTexture {
                     &[region],
                 );
 
+                // Transition the image into the layout used by fragment shaders.
                 let to_shader = vk::ImageMemoryBarrier::default()
                     .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
                     .dst_access_mask(vk::AccessFlags::SHADER_READ)
@@ -218,6 +243,7 @@ impl GpuTexture {
             staging.destroy(device, allocator);
 
 
+            // Create the image view used to bind the texture in descriptors.
             let view_info = vk::ImageViewCreateInfo::default()
                 .image(image)
                 .view_type(vk::ImageViewType::TYPE_2D)
@@ -227,12 +253,14 @@ impl GpuTexture {
             let view = device.device.create_image_view(&view_info, None).unwrap();
 
 
+            // Read the device limit so anisotropic filtering stays valid.
             let max_aniso = device
                 .instance
                 .get_physical_device_properties(device.pdevice)
                 .limits
                 .max_sampler_anisotropy;
 
+            // Create the sampler that controls filtering and wrapping behavior.
             let sampler_info = vk::SamplerCreateInfo::default()
                 .mag_filter(vk::Filter::LINEAR)
                 .min_filter(vk::Filter::LINEAR)
@@ -256,6 +284,7 @@ impl GpuTexture {
         }
     }
 
+    /// Returns the full color subresource range for this 2D texture.
     fn full_subresource() -> vk::ImageSubresourceRange {
         vk::ImageSubresourceRange {
             aspect_mask:      vk::ImageAspectFlags::COLOR,

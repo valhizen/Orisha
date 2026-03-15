@@ -3,9 +3,15 @@ use noise::{NoiseFn, Perlin};
 
 use crate::gpu::buffer::Vertex;
 
+/// World-space UV tiling factor used for terrain and water texturing.
 const UV_TILE_SCALE: f32 = 8.0;
+/// Base water level before it is scaled by terrain amplitude.
 const WATER_LEVEL: f64 = 0.02;
 
+/// Procedural terrain generator.
+///
+/// This struct stores several Perlin noise sources that are combined to build
+/// continents, mountains, rivers, moisture, and smaller surface detail.
 pub struct Terrain {
     pub amplitude: f32,
     continent:  Perlin,
@@ -25,6 +31,9 @@ pub struct Terrain {
 }
 
 impl Terrain {
+    /// Creates a terrain generator with a fixed height scale and seed.
+    ///
+    /// Using the same seed gives the same world shape.
     pub fn new(amplitude: f32, seed: u32) -> Self {
         Self {
             amplitude,
@@ -45,7 +54,14 @@ impl Terrain {
         }
     }
 
+    /// Builds the base terrain shape before rivers/lakes are carved out.
+    ///
+    /// Returns:
+    /// - base height
+    /// - biome factor
+    /// - moisture factor
     fn base_height(&self, wx: f64, wz: f64) -> (f64, f64, f64) {
+        // Warp the sampling position so the terrain feels less grid-like.
         let warp_str = 150.0;
         let wx_w = wx + fbm(&self.warp, wx, wz, 0.001, 3, 2.0, 0.5) * warp_str;
         let wz_w = wz + fbm(&self.warp, wx + 3000.0, wz + 3000.0, 0.001, 3, 2.0, 0.5) * warp_str;
@@ -108,7 +124,9 @@ impl Terrain {
         (h, biome_t, moisture)
     }
 
+    /// Computes how strongly a river should carve into the terrain here.
     fn river_depth(&self, wx: f64, wz: f64, base_h: f64, biome_t: f64) -> f64 {
+        // Warp river paths so they meander instead of following straight noise bands.
         let warp_s = 350.0;
         let rw_x = wx + self.river_warp.get([wx * 0.0005, wz * 0.0005]) * warp_s
             + self.river_warp.get([wx * 0.002 + 700.0, wz * 0.002 + 700.0]) * 80.0;
@@ -132,6 +150,7 @@ impl Terrain {
         river_val * lerp(0.5, 1.0, low_preference) * mountain_suppress
     }
 
+    /// Computes how strongly a lake basin should form here.
     fn lake_depth(&self, wx: f64, wz: f64, base_h: f64) -> f64 {
         let lake_noise = fbm(&self.moisture, wx + 8000.0, wz + 8000.0, 0.0006, 2, 2.0, 0.5);
         let lake_basin = smoothstep(-0.05, 0.2, -lake_noise);
@@ -139,6 +158,10 @@ impl Terrain {
         lake_basin * low_area
     }
 
+    /// Adds extra vertical displacement that helps create sharper cliffy shapes.
+    ///
+    /// Even though this uses names like "cave", this is still heightmap terrain:
+    /// one final height value is produced for each world (x, z) position.
     fn cave_displacement(&self, wx: f64, wz: f64, biome_t: f64) -> f64 {
         let c1 = self.cave.get([wx * 0.006, wz * 0.006]);
         let c2 = self.cave2.get([wx * 0.009 + 200.0, wz * 0.009 + 200.0]);
@@ -152,6 +175,13 @@ impl Terrain {
         -(cave_depth + overhang)
     }
 
+    /// Full terrain sample used by both gameplay and rendering.
+    ///
+    /// Returns:
+    /// - final height
+    /// - water carve amount
+    /// - biome factor
+    /// - moisture factor
     fn compute_full(&self, xd: f64, zd: f64) -> (f64, f64, f64, f64) {
         let (base_h, biome_t, moisture) = self.base_height(xd, zd);
 
@@ -169,6 +199,7 @@ impl Terrain {
         (h, water_carve, biome_t, moisture)
     }
 
+    /// Returns the final terrain height in world space.
     pub fn height_at(&self, x: f32, z: f32) -> f32 {
         let (h, water, _, _) = self.compute_full(x as f64, z as f64);
         let final_h = if h < WATER_LEVEL && water > 0.05 {
@@ -179,6 +210,9 @@ impl Terrain {
         final_h as f32 * self.amplitude
     }
 
+    /// Returns a fuller terrain sample for rendering decisions.
+    ///
+    /// This includes terrain height plus extra data used to color the mesh.
     pub fn full_sample_at(&self, x: f32, z: f32) -> (f32, f32, f32, f32) {
         let (h, water, biome, moisture) = self.compute_full(x as f64, z as f64);
         (
@@ -189,6 +223,7 @@ impl Terrain {
         )
     }
 
+    /// Approximates the terrain normal by sampling nearby heights.
     pub fn normal_at(&self, x: f32, z: f32) -> Vec3 {
         let e = 0.2;
         let h_left  = self.height_at(x - e, z);
@@ -199,15 +234,18 @@ impl Terrain {
     }
 }
 
+/// Linear interpolation helper.
 fn lerp(a: f64, b: f64, t: f64) -> f64 {
     a + (b - a) * t
 }
 
+/// Smooth interpolation helper often used for soft masks.
 fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Standard fractal Brownian motion noise built from multiple octaves.
 fn fbm(
     noise: &Perlin, x: f64, z: f64,
     base_freq: f64, octaves: u32,
@@ -227,6 +265,7 @@ fn fbm(
     value / max_amp
 }
 
+/// Ridged noise variant often useful for mountain-like shapes.
 fn ridged_fbm(
     noise: &Perlin, x: f64, z: f64,
     base_freq: f64, octaves: u32,
@@ -247,21 +286,27 @@ fn ridged_fbm(
     value / max_amp
 }
 
+/// Number of quads along one side of a terrain chunk.
 pub const CHUNK_SIZE: u32 = 64;
+/// World-space spacing between terrain vertices.
 pub const CHUNK_SCALE: f32 = 2.0;
+/// Final world-space size of one chunk.
 pub const CHUNK_WORLD_SIZE: f32 = CHUNK_SIZE as f32 * CHUNK_SCALE;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Integer chunk coordinate in chunk space, not world space.
 pub struct ChunkCoord {
     pub x: i32,
     pub z: i32,
 }
 
 impl ChunkCoord {
+    /// Converts chunk coordinates into the world-space origin of that chunk.
     pub fn world_origin(&self) -> (f32, f32) {
         (self.x as f32 * CHUNK_WORLD_SIZE, self.z as f32 * CHUNK_WORLD_SIZE)
     }
 
+    /// Finds which chunk contains a world-space position.
     pub fn from_world(wx: f32, wz: f32) -> Self {
         Self {
             x: (wx / CHUNK_WORLD_SIZE).floor() as i32,
@@ -270,9 +315,17 @@ impl ChunkCoord {
     }
 }
 
+/// Builds CPU-side mesh data for one terrain chunk.
+///
+/// Returns:
+/// - terrain vertices
+/// - terrain indices
+/// - water vertices
+/// - water indices
 pub fn build_chunk_mesh(terrain: &Terrain, coord: ChunkCoord)
     -> (Vec<Vertex>, Vec<u32>, Vec<Vertex>, Vec<u32>)
 {
+    // Vertices per side is one more than the quad count.
     let vps = CHUNK_SIZE + 1;
     let vert_count = (vps * vps) as usize;
     let idx_count = (CHUNK_SIZE * CHUNK_SIZE * 6) as usize;
@@ -284,6 +337,7 @@ pub fn build_chunk_mesh(terrain: &Terrain, coord: ChunkCoord)
     let water_surface_y = WATER_LEVEL as f32 * terrain.amplitude;
     let (ox, oz) = coord.world_origin();
 
+    // Build the terrain vertex grid in world space.
     for z in 0..vps {
         for x in 0..vps {
             let wx = ox + x as f32 * CHUNK_SCALE;
@@ -308,6 +362,7 @@ pub fn build_chunk_mesh(terrain: &Terrain, coord: ChunkCoord)
         }
     }
 
+    // Connect the grid into triangles.
     for z in 0..CHUNK_SIZE {
         for x in 0..CHUNK_SIZE {
             let tl = z * vps + x;
@@ -325,12 +380,14 @@ pub fn build_chunk_mesh(terrain: &Terrain, coord: ChunkCoord)
         }
     }
 
+    // Recompute normals from triangle geometry for smoother lighting.
     compute_smooth_normals(&mut vertices, &indices);
 
     let mut water_verts = Vec::new();
     let mut water_idxs: Vec<u32> = Vec::new();
     let mut water_remap = vec![u32::MAX; vert_count];
 
+    // Build a second flat mesh for water anywhere the terrain is submerged.
     for z in 0..CHUNK_SIZE {
         for x in 0..CHUNK_SIZE {
             let tl = (z * vps + x) as usize;
@@ -365,6 +422,7 @@ pub fn build_chunk_mesh(terrain: &Terrain, coord: ChunkCoord)
     (vertices, indices, water_verts, water_idxs)
 }
 
+/// Rebuilds vertex normals by averaging triangle normals.
 fn compute_smooth_normals(vertices: &mut [Vertex], indices: &[u32]) {
     for v in vertices.iter_mut() {
         v.normal = [0.0, 0.0, 0.0];
@@ -387,6 +445,7 @@ fn compute_smooth_normals(vertices: &mut [Vertex], indices: &[u32]) {
     }
 }
 
+/// Interpolates between two RGB colors.
 fn color_lerp(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     [
         a[0] + (b[0] - a[0]) * t,
@@ -395,6 +454,7 @@ fn color_lerp(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     ]
 }
 
+/// Chooses a seabed color based on how deep below the water surface it is.
 fn underwater_color(height: f32, water_y: f32) -> [f32; 3] {
     let depth = (water_y - height).max(0.0);
     let t = (depth / 20.0).clamp(0.0, 1.0);
@@ -403,6 +463,7 @@ fn underwater_color(height: f32, water_y: f32) -> [f32; 3] {
     color_lerp(shallow_bed, deep_bed, t)
 }
 
+/// Picks a terrain color from height, biome, moisture, and nearby water amount.
 fn terrain_color(height: f32, amplitude: f32, biome: f32, moisture: f32, water: f32) -> [f32; 3] {
     let beach:          [f32; 3] = [0.78, 0.72, 0.52];
     let wet_sand:       [f32; 3] = [0.55, 0.48, 0.30];

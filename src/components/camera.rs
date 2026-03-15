@@ -1,11 +1,15 @@
 use glam::{Vec3, Mat4, Quat};
 
+/// High-level camera behavior modes used by the game.
 pub enum CameraMode {
     ThirdPerson,
     FirstPerson,
     Free,
 }
 
+/// Stores camera transform and tuning values.
+///
+/// Most gameplay camera behavior is controlled from this struct.
 pub struct Camera {
     pub position: Vec3,
     pub rotation: Quat,
@@ -24,6 +28,7 @@ pub struct Camera {
 }
 
 impl Camera {
+    /// Creates a third-person camera looking at a target point.
     pub fn new_third_person(target: Vec3) -> Self {
         Self {
             position: target + Vec3::new(1.0, 2.0, 4.0),
@@ -43,6 +48,7 @@ impl Camera {
         }
     }
 
+    /// Creates a first-person camera starting at a world position.
     pub fn new_first_person(position: Vec3) -> Self {
         Self {
             position,
@@ -62,9 +68,15 @@ impl Camera {
         }
     }
 
+    /// Updates the camera based on the current mode.
+    ///
+    /// In third-person mode, the camera smoothly follows behind the target.
+    /// In first-person mode, the camera sits directly on the target.
+    /// In free mode, movement is handled elsewhere.
     pub fn follow_target(&mut self, target: Vec3, delta_time: f32) {
         match self.mode {
             CameraMode::ThirdPerson => {
+                // Smoothly move the focus point toward the target.
                 let t = (self.smoothness * delta_time).clamp(0.0, 1.0);
                 self.focus_point = self.focus_point.lerp(target, t);
 
@@ -74,6 +86,7 @@ impl Camera {
                 let behind = Vec3::new(sin_yaw, 0.0, cos_yaw);
                 let cam_right = Vec3::new(cos_yaw, 0.0, -sin_yaw);
 
+                // Build the desired third-person camera position.
                 let ideal = self.focus_point
                     + behind * (self.distance * cos_pitch)
                     + Vec3::Y * (self.height_offset + self.distance * sin_pitch)
@@ -82,6 +95,7 @@ impl Camera {
                 self.position = self.position.lerp(ideal, t);
             }
             CameraMode::FirstPerson => {
+                // First-person camera stays at the target with a small height offset.
                 self.position = target + Vec3::new(0.0, self.height_offset, 0.0);
                 let yaw_quat = Quat::from_rotation_y(self.yaw);
                 let pitch_quat = Quat::from_rotation_x(self.pitch);
@@ -91,6 +105,9 @@ impl Camera {
         }
     }
 
+    /// Rotates the camera using mouse delta input.
+    ///
+    /// Pitch is clamped so the camera never flips upside down.
     pub fn rotate(&mut self, delta_x: f32, delta_y: f32) {
         self.yaw -= delta_x * self.sensitivity;
         self.pitch = (self.pitch - delta_y * self.sensitivity)
@@ -98,10 +115,12 @@ impl Camera {
         self.rotation = Quat::from_rotation_y(self.yaw) * Quat::from_rotation_x(self.pitch);
     }
 
+    /// Changes third-person camera distance.
     pub fn zoom(&mut self, delta: f32) {
         self.distance = (self.distance - delta * 0.5).clamp(1.5, 12.0);
     }
 
+    /// Builds the view matrix used by the renderer.
     pub fn view_matrix(&self) -> Mat4 {
         match self.mode {
             CameraMode::ThirdPerson => {
@@ -115,6 +134,9 @@ impl Camera {
         }
     }
 
+    /// Builds a perspective projection matrix.
+    ///
+    /// The Y axis is flipped to match Vulkan clip space conventions.
     pub fn projection_matrix(&self, aspect_ratio: f32) -> Mat4 {
         let mut proj = Mat4::perspective_rh(
             self.fov,

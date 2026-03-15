@@ -18,8 +18,19 @@ use super::{
     texture::GpuTexture,
 };
 
+/// Depth format used by the main 3D pass.
 const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
+/// High-level Vulkan renderer.
+///
+/// This struct owns almost all GPU-side systems:
+/// - Vulkan device and swapchain
+/// - command buffers and sync objects
+/// - descriptor sets and pipelines
+/// - depth buffer
+/// - terrain textures
+///
+/// `main.rs` prepares gameplay/render data, and `Renderer` handles the Vulkan work.
 pub struct Renderer {
     pub allocator:  GpuAllocator,
     pub device:     Device,
@@ -29,22 +40,35 @@ pub struct Renderer {
     pub descriptors: Descriptors,
     pub pipeline:   Pipeline,
     pub sky_pipeline: SkyPipeline,
+    /// One camera uniform buffer per frame in flight.
     camera_ubos:    Vec<GpuBuffer>,
+    /// Depth image used for 3D depth testing.
     depth_image:    vk::Image,
     depth_view:     vk::ImageView,
     depth_alloc:    Option<Allocation>,
+    /// Terrain material textures used by the main shader.
     terrain_diffuse: GpuTexture,
     terrain_normal:  GpuTexture,
     terrain_spec:    GpuTexture,
     terrain_rough:   GpuTexture,
     terrain_disp:    GpuTexture,
+    /// Increases every frame and is used to rotate through per-frame resources.
     pub frame_index: usize,
 }
 
 impl Renderer {
+    /// Creates the full renderer and all main Vulkan resources.
+    ///
+    /// Startup order here matters:
+    /// 1. create core Vulkan objects
+    /// 2. create per-frame buffers and descriptors
+    /// 3. load textures
+    /// 4. create depth buffer
+    /// 5. create graphics pipelines
     pub fn new(window: &winit::window::Window) -> Result<Self, Box<dyn Error>> {
         let size = window.inner_size();
 
+        // Core Vulkan objects.
         let device    = Device::new(window)?;
         let allocator = GpuAllocator::new(&device);
         let swapchain = SwapChain::new(&device, size.width, size.height)?;
@@ -52,6 +76,7 @@ impl Renderer {
         let sync      = FrameSync::new(&device, swapchain.present_images.len())?;
         let descriptors = Descriptors::new(&device)?;
 
+        // One camera UBO per frame in flight so CPU updates do not fight each other.
         let camera_ubos: Vec<GpuBuffer> = (0..MAX_FRAMES_IN_FLIGHT)
             .map(|i| {
                 GpuBuffer::new(
@@ -65,6 +90,7 @@ impl Renderer {
             })
             .collect();
 
+        // Connect the camera buffers to the descriptor sets.
         descriptors.write_camera_sets(
             &device,
             &camera_ubos,
@@ -112,6 +138,7 @@ impl Renderer {
         );
         println!("  displacement ✓");
 
+        // Write texture descriptors so the main fragment shader can sample them.
         descriptors.write_texture_sets(
             &device,
             &terrain_diffuse,
@@ -121,9 +148,11 @@ impl Renderer {
             &terrain_disp,
         );
 
+        // Create the depth buffer used by the 3D pass.
         let (depth_image, depth_view, depth_alloc) =
             Self::create_depth(&device, &allocator, size.width, size.height);
 
+        // Create pipelines after swapchain/depth formats are known.
         let pipeline =
             Pipeline::new(&device, &swapchain, descriptors.camera_layout, DEPTH_FORMAT)?;
 
@@ -152,11 +181,18 @@ impl Renderer {
         })
     }
 
+    /// Rebuilds size-dependent GPU resources after the window size changes.
+    ///
+    /// Right now that mainly means:
+    /// - recreate the swapchain
+    /// - destroy the old depth buffer
+    /// - create a new depth buffer matching the new size
     pub fn resize(&mut self, width: u32, height: u32) {
         self.swapchain
             .recreate(&self.device, width, height)
             .expect("Swapchain recreate failed");
 
+        // The old depth buffer no longer matches the new swapchain size.
         unsafe {
             self.device.device.destroy_image_view(self.depth_view, None);
             self.device.device.destroy_image(self.depth_image, None);
@@ -164,6 +200,7 @@ impl Renderer {
         if let Some(alloc) = self.depth_alloc.take() {
             self.allocator.free(alloc);
         }
+
         let (img, view, alloc) = Self::create_depth(
             &self.device,
             &self.allocator,
@@ -175,6 +212,10 @@ impl Renderer {
         self.depth_alloc = Some(alloc);
     }
 
+    /// Draws one full frame.
+    ///
+    /// The renderer does the low-level Vulkan steps here, while the caller
+    /// provides a closure (`record_fn`) that records the actual scene draw calls.
     pub fn draw_frame<F>(&mut self, camera: &CameraUbo, record_fn: F)
     where
         F: FnOnce(&ash::Device, vk::CommandBuffer, vk::PipelineLayout),
@@ -182,6 +223,7 @@ impl Renderer {
         unsafe {
             let frame = self.frame_index % MAX_FRAMES_IN_FLIGHT;
 
+            // Wait until the GPU has finished using this frame slot.
             self.device
                 .device
                 .wait_for_fences(&[self.sync.fences[frame]], true, u64::MAX)
@@ -191,6 +233,7 @@ impl Renderer {
                 .reset_fences(&[self.sync.fences[frame]])
                 .unwrap();
 
+            // Ask the swapchain for the next image we should render into.
             let acquire = self.swapchain.swapchain_loader.acquire_next_image(
                 self.swapchain.swapchain,
                 u64::MAX,
@@ -204,6 +247,7 @@ impl Renderer {
                 Err(e) => panic!("acquire_next_image failed: {e}"),
             };
 
+            // Upload the current frame's camera data.
             self.camera_ubos[frame].write(camera);
 
             let cmd = self.commands.draw_buffers[frame];
@@ -211,6 +255,7 @@ impl Renderer {
             let color_image = self.swapchain.present_images[image_index];
             let color_view = self.swapchain.present_image_views[image_index];
 
+            // Start recording a fresh command buffer.
             self.device
                 .device
                 .reset_command_buffer(cmd, vk::CommandBufferResetFlags::RELEASE_RESOURCES)
@@ -220,6 +265,7 @@ impl Renderer {
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
             self.device.device.begin_command_buffer(cmd, &begin).unwrap();
 
+            // Transition the swapchain image and depth image into renderable layouts.
             let color_barrier = vk::ImageMemoryBarrier2::default()
                 .src_stage_mask(vk::PipelineStageFlags2::TOP_OF_PIPE)
                 .src_access_mask(vk::AccessFlags2::NONE)
@@ -249,6 +295,7 @@ impl Renderer {
                 &vk::DependencyInfo::default().image_memory_barriers(&barriers),
             );
 
+            // Describe the color attachment and how it should be cleared/stored.
             let color_attach = vk::RenderingAttachmentInfo::default()
                 .image_view(color_view)
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
@@ -260,6 +307,7 @@ impl Renderer {
                     },
                 });
 
+            // Describe the depth attachment and clear it to far depth.
             let depth_attach = vk::RenderingAttachmentInfo::default()
                 .image_view(self.depth_view)
                 .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
@@ -272,6 +320,7 @@ impl Renderer {
                     },
                 });
 
+            // Begin dynamic rendering for this frame.
             let rendering = vk::RenderingInfo::default()
                 .render_area(vk::Rect2D {
                     offset: vk::Offset2D { x: 0, y: 0 },
@@ -283,6 +332,7 @@ impl Renderer {
 
             self.device.device.cmd_begin_rendering(cmd, &rendering);
 
+            // Bind the main world pipeline and the descriptor set for this frame.
             self.device.device.cmd_bind_pipeline(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -298,6 +348,7 @@ impl Renderer {
                 &[],
             );
 
+            // Viewport and scissor are dynamic state, so they are set every frame.
             self.device.device.cmd_set_viewport(
                 cmd,
                 0,
@@ -320,10 +371,12 @@ impl Renderer {
                 }],
             );
 
+            // Let the caller record actual scene draw calls.
             record_fn(&self.device.device, cmd, self.pipeline.pipeline_layout);
 
             self.device.device.cmd_end_rendering(cmd);
 
+            // Transition the swapchain image into present layout so it can be shown on screen.
             let to_present = vk::ImageMemoryBarrier2::default()
                 .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
                 .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
@@ -346,6 +399,7 @@ impl Renderer {
             let signal_sems = [self.sync.render_finished[image_index]];
             let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
 
+            // Submit the command buffer to the graphics/present queue.
             let submit = vk::SubmitInfo::default()
                 .wait_semaphores(&wait_sems)
                 .wait_dst_stage_mask(&wait_stages)
@@ -364,6 +418,7 @@ impl Renderer {
             let swapchains = [self.swapchain.swapchain];
             let indices = [image_index as u32];
 
+            // Present the finished image to the window.
             let present = vk::PresentInfoKHR::default()
                 .wait_semaphores(&signal_sems)
                 .swapchains(&swapchains)
@@ -382,6 +437,9 @@ impl Renderer {
         }
     }
 
+    /// Creates the depth image, its memory, and its image view.
+    ///
+    /// The depth buffer is recreated whenever the swapchain size changes.
     fn create_depth(
         device: &Device,
         allocator: &GpuAllocator,
@@ -407,6 +465,7 @@ impl Renderer {
             let image = device.device.create_image(&info, None).unwrap();
             let requirements = device.device.get_image_memory_requirements(image);
 
+            // Allocate GPU-only memory for the depth image.
             let alloc = allocator.allocate(&AllocationCreateDesc {
                 name: "depth_image",
                 requirements,
@@ -420,6 +479,7 @@ impl Renderer {
                 .bind_image_memory(image, alloc.memory(), alloc.offset())
                 .unwrap();
 
+            // Create an image view so Vulkan can use the image as a depth attachment.
             let view_info = vk::ImageViewCreateInfo::default()
                 .image(image)
                 .view_type(vk::ImageViewType::TYPE_2D)
@@ -455,19 +515,23 @@ impl Renderer {
 
 impl Drop for Renderer {
     fn drop(&mut self) {
+        // Make sure the GPU is done before tearing down resources.
         unsafe { self.device.device.device_wait_idle().unwrap() };
 
+        // Destroy pipelines and synchronization objects first.
         self.pipeline.destroy(&self.device);
         self.sky_pipeline.destroy(&self.device);
         self.sync.destroy(&self.device);
         self.descriptors.destroy(&self.device);
 
+        // Free textures owned by the renderer.
         self.terrain_diffuse.cleanup(&self.device, &self.allocator);
         self.terrain_normal .cleanup(&self.device, &self.allocator);
         self.terrain_spec   .cleanup(&self.device, &self.allocator);
         self.terrain_rough  .cleanup(&self.device, &self.allocator);
         self.terrain_disp   .cleanup(&self.device, &self.allocator);
 
+        // Destroy the depth buffer.
         unsafe {
             self.device.device.destroy_image_view(self.depth_view, None);
             self.device.device.destroy_image(self.depth_image, None);
@@ -476,10 +540,12 @@ impl Drop for Renderer {
             self.allocator.free(alloc);
         }
 
+        // Destroy per-frame camera buffers.
         for ubo in self.camera_ubos.drain(..) {
             ubo.destroy(&self.device, &self.allocator);
         }
 
+        // Destroy command pool and swapchain last from this layer.
         self.commands.destroy(&self.device);
         self.swapchain.destroy(&self.device);
     }

@@ -1,8 +1,12 @@
 use ash::{khr::swapchain, vk};
 use std::error::Error;
 
+// The swapchain owns the images we render into before presenting them on screen.
+// You can think of it as the queue of screen images managed by Vulkan.
+
 use super::device::Device;
 
+/// Holds the Vulkan swapchain and the image views created from its images.
 pub struct SwapChain {
     pub swapchain_loader: swapchain::Device,
     pub swapchain: vk::SwapchainKHR,
@@ -13,10 +17,12 @@ pub struct SwapChain {
 }
 
 impl SwapChain {
+    /// Creates the first swapchain when the renderer starts.
     pub fn new(device: &Device, width: u32, height: u32) -> Result<Self, Box<dyn Error>> {
         let (loader, swapchain, format, resolution) =
             Self::create_swapchain(device, width, height, vk::SwapchainKHR::null())?;
 
+        // After creating the swapchain, fetch its images and create views for them.
         let images = unsafe { loader.get_swapchain_images(swapchain)? };
         let views = Self::create_image_views(device, &images, format.format);
 
@@ -30,25 +36,29 @@ impl SwapChain {
         })
     }
 
+    /// Recreates the swapchain, usually after a window resize.
     pub fn recreate(
         &mut self,
         device: &Device,
         width: u32,
         height: u32,
     ) -> Result<(), Box<dyn Error>> {
+        // Wait until the GPU is idle before replacing swapchain resources.
         unsafe { device.device.device_wait_idle()? };
 
         let old = self.swapchain;
         let (loader, swapchain, format, resolution) =
             Self::create_swapchain(device, width, height, old)?;
 
-         let images = unsafe { loader.get_swapchain_images(swapchain)? };
-         let views = Self::create_image_views(device, &images, format.format);
+        let images = unsafe { loader.get_swapchain_images(swapchain)? };
+        let views = Self::create_image_views(device, &images, format.format);
 
-         for &view in &self.present_image_views {
-                          unsafe { device.device.destroy_image_view(view, None) };
-                      }
+        // Destroy the old image views before replacing them.
+        for &view in &self.present_image_views {
+            unsafe { device.device.destroy_image_view(view, None) };
+        }
 
+        // Destroy the old swapchain after the new one has been created.
         unsafe { loader.destroy_swapchain(old, None) };
 
         self.swapchain_loader = loader;
@@ -61,6 +71,7 @@ impl SwapChain {
         Ok(())
     }
 
+    /// Creates a Vulkan swapchain and returns the basic data needed by the renderer.
     fn create_swapchain(
         device: &Device,
         width: u32,
@@ -76,10 +87,12 @@ impl SwapChain {
         Box<dyn Error>,
     > {
         unsafe {
+            // Query which surface formats this GPU + window surface supports.
             let formats = device
                 .surface_loader
                 .get_physical_device_surface_formats(device.pdevice, device.surface)?;
 
+            // Prefer SRGB if available, otherwise fall back to the first supported format.
             let format = formats
                 .iter()
                 .copied()
@@ -89,20 +102,24 @@ impl SwapChain {
                 })
                 .unwrap_or(formats[0]);
 
+            // Query surface limits such as image count and surface size rules.
             let caps = device
             .surface_loader
             .get_physical_device_surface_capabilities(device.pdevice, device.surface)?;
 
+            // Usually we ask for one more image than the minimum so rendering can overlap better.
             let mut image_count = caps.min_image_count + 1;
             if caps.max_image_count > 0 && image_count > caps.max_image_count {
                 image_count = caps.max_image_count;
             }
 
+            // Some platforms force the extent. Others let us choose it.
             let extent = match caps.current_extent.width {
                 u32::MAX => vk::Extent2D { width, height },
                 _ => caps.current_extent,
             };
 
+            // Prefer identity transform if supported so the image is not rotated by the surface.
             let transform =
                 if caps
                     .supported_transforms
@@ -113,6 +130,7 @@ impl SwapChain {
                     caps.current_transform
                 };
 
+            // Prefer MAILBOX for lower latency if available, otherwise use FIFO.
             let present_modes = device
                 .surface_loader
                 .get_physical_device_surface_present_modes(device.pdevice, device.surface)?;
@@ -145,6 +163,9 @@ impl SwapChain {
         }
     }
 
+    /// Creates one image view for each swapchain image.
+    ///
+    /// Vulkan rendering usually works with image views rather than raw images.
     fn create_image_views(
         device: &Device,
         images: &[vk::Image],
@@ -175,6 +196,7 @@ impl SwapChain {
             .collect()
     }
 
+    /// Destroys the image views and the swapchain itself.
     pub fn destroy(&self, device: &Device) {
         unsafe {
             for &view in &self.present_image_views {

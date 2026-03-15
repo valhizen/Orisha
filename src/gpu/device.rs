@@ -3,6 +3,8 @@ use std::{borrow::Cow, error::Error, ffi, os::raw::c_char};
 use ash::{ext::debug_utils, khr::surface, vk, Device as AshDevice, Entry, Instance};
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
+/// Validation/debug callback used by Vulkan when validation layers report
+/// warnings or errors.
 unsafe extern "system" fn vulkan_debug_callback(
     severity: vk::DebugUtilsMessageSeverityFlagsEXT,
     msg_type: vk::DebugUtilsMessageTypeFlagsEXT,
@@ -27,6 +29,10 @@ unsafe extern "system" fn vulkan_debug_callback(
     }
 }
 
+/// Gives each physical device a score so the app can choose the best GPU.
+///
+/// A device is rejected with `-1` if it does not support the Vulkan version,
+/// features, queue support, or swapchain support that this renderer needs.
 fn score_device(
     instance: &Instance,
     pdevice: vk::PhysicalDevice,
@@ -36,20 +42,25 @@ fn score_device(
     unsafe {
         let props = instance.get_physical_device_properties(pdevice);
 
+        // This renderer expects Vulkan 1.3.
         if props.api_version < vk::API_VERSION_1_3 {
             return -1;
         }
 
+        // Query Vulkan 1.3 feature support from the GPU.
         let mut features_13 = vk::PhysicalDeviceVulkan13Features::default();
         let mut features2 = vk::PhysicalDeviceFeatures2::default().push_next(&mut features_13);
         instance.get_physical_device_features2(pdevice, &mut features2);
 
+        // Reject devices missing features used by the renderer.
         if features_13.dynamic_rendering == vk::FALSE
             || features_13.synchronization2 == vk::FALSE
         {
             return -1;
         }
 
+        // Check whether this GPU has at least one queue family that can both
+        // render graphics and present images to the window surface.
         let has_queue = instance
             .get_physical_device_queue_family_properties(pdevice)
             .iter()
@@ -60,9 +71,15 @@ fn score_device(
                         .get_physical_device_surface_support(pdevice, i as u32, surface)
                         .unwrap_or(false)
             });
+        // Get All the SwapChain and Surface features Supported By Vulkan
+        // uncomment the code to see it
+
+        // let surface_support = surface_loader.get_physical_device_surface_formats(pdevice, surface);
+        // println!("Vulkan SwapChain Support :{ :?}", surface_support);
 
         if !has_queue { return -1; }
 
+        // Swapchain rendering also needs supported formats and present modes.
         let formats = surface_loader
             .get_physical_device_surface_formats(pdevice, surface)
             .unwrap_or_default();
@@ -74,6 +91,7 @@ fn score_device(
             return -1;
         }
 
+        // Prefer faster GPU classes when multiple valid devices exist.
         match props.device_type {
             vk::PhysicalDeviceType::DISCRETE_GPU => 1000,
             vk::PhysicalDeviceType::INTEGRATED_GPU => 100,
@@ -83,6 +101,15 @@ fn score_device(
     }
 }
 
+/// Owns the main Vulkan objects needed for rendering.
+///
+/// This includes:
+/// - Vulkan entry/instance
+/// - debug messenger
+/// - window surface
+/// - logical device
+/// - selected physical device
+/// - graphics/present queue information
 pub struct Device {
     pub entry: Entry,
     pub instance: Instance,
@@ -98,15 +125,20 @@ pub struct Device {
 }
 
 impl Device {
+    /// Creates the Vulkan instance, picks a GPU, and creates the logical device.
     pub fn new(window: &winit::window::Window) -> Result<Self, Box<dyn Error>> {
         unsafe {
+            // Entry is the starting point for loading Vulkan function pointers.
             let entry = Entry::linked();
             let app_name = c"Orisha";
 
+            // Validation layers help catch Vulkan mistakes while developing.
             let layer_names = [c"VK_LAYER_KHRONOS_validation"];
             let layers_raw: Vec<*const c_char> =
                 layer_names.iter().map(|n| n.as_ptr()).collect();
 
+            // Ask the windowing helper which instance extensions are required
+            // for this platform, then add debug utils for validation messages.
             let mut extension_names =
                 ash_window::enumerate_required_extensions(window.display_handle()?.as_raw())
                     .unwrap()
@@ -121,6 +153,8 @@ impl Device {
                             extension_names.push(ash::khr::get_physical_device_properties2::NAME.as_ptr());
                         }
 
+            // Application/engine info is mostly metadata, but it also declares
+            // the Vulkan API version this app wants to use.
             let app_info = vk::ApplicationInfo::default()
                 .application_name(app_name)
                 .application_version(vk::make_api_version(0, 1, 0, 0))
@@ -134,6 +168,7 @@ impl Device {
                        vk::InstanceCreateFlags::default()
                    };
 
+            // Create the Vulkan instance.
             let instance_info = vk::InstanceCreateInfo::default()
                 .application_info(&app_info)
                 .enabled_layer_names(&layers_raw)
@@ -142,6 +177,7 @@ impl Device {
 
             let instance = entry.create_instance(&instance_info, None).expect("Create Instance Error!");
 
+            // Set up the debug messenger so validation messages are printed.
             let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
                 .message_severity(
                     vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
@@ -160,6 +196,7 @@ impl Device {
 
             let surface_loader = surface::Instance::new(&entry, &instance);
 
+            // Create the OS/window surface so Vulkan can present images to it.
             let surface = ash_window::create_surface(
                 &entry,
                 &instance,
@@ -168,6 +205,7 @@ impl Device {
                 None,
             )?;
 
+            // List all physical devices (GPUs) visible to Vulkan.
             let pdevices = instance.enumerate_physical_devices()?;
 
             println!("── Available GPUs ──");
@@ -178,6 +216,7 @@ impl Device {
                 println!("  [{score:4}] {name} ({:?})", props.device_type);
             }
 
+            // Pick the highest-scoring usable GPU.
             let pdevice = pdevices
                 .iter()
                 .copied()
@@ -189,6 +228,8 @@ impl Device {
             let name = ffi::CStr::from_ptr(sel.device_name.as_ptr()).to_string_lossy();
             println!("Selected GPU: {name}\n");
 
+            // Find one queue family that supports both graphics commands and
+            // presenting to the window surface.
             let queue_family_index = instance
                 .get_physical_device_queue_family_properties(pdevice)
                 .iter()
@@ -202,13 +243,18 @@ impl Device {
                 })
                 .expect("No graphics+present queue family");
 
+            // Create one logical queue from the chosen family.
             let priorities = [1.0f32];
             let queue_info = vk::DeviceQueueCreateInfo::default()
                 .queue_family_index(queue_family_index)
                 .queue_priorities(&priorities);
 
-            let device_extensions = [ash::khr::swapchain::NAME.as_ptr()];
+            // Device extensions add optional Vulkan features.
+            let device_extensions = [ash::khr::swapchain::NAME.as_ptr(),
+                ash::khr::ray_tracing_pipeline::NAME.as_ptr()
+            ];
 
+            // Enable Vulkan 1.2/1.3 feature structs needed by the renderer.
             let mut features_12 = vk::PhysicalDeviceVulkan12Features::default()
                 .buffer_device_address(true);
 
@@ -216,9 +262,11 @@ impl Device {
                 .dynamic_rendering(true)
                 .synchronization2(true);
 
+            // Enable core device features.
             let features = vk::PhysicalDeviceFeatures::default()
                 .sampler_anisotropy(true);
 
+            // Create the logical device from the selected physical device.
             let device_info = vk::DeviceCreateInfo::default()
                 .push_next(&mut features_12)
                 .push_next(&mut features_13)
@@ -228,6 +276,8 @@ impl Device {
 
             let device = instance.create_device(pdevice, &device_info, None)?;
             let present_queue = device.get_device_queue(queue_family_index, 0);
+
+            // Store memory properties so other systems can inspect GPU memory types.
             let device_memory_properties =
                 instance.get_physical_device_memory_properties(pdevice);
 
@@ -251,6 +301,7 @@ impl Device {
 impl Drop for Device {
     fn drop(&mut self) {
         unsafe {
+            // Wait until the GPU is idle before destroying Vulkan objects.
             self.device.device_wait_idle().unwrap();
             self.device.destroy_device(None);
             self.surface_loader.destroy_surface(self.surface, None);

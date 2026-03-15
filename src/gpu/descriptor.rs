@@ -6,6 +6,11 @@ use super::commands::MAX_FRAMES_IN_FLIGHT;
 use super::device::Device;
 use super::texture::GpuTexture;
 
+/// Owns the descriptor pool, descriptor set layout, and per-frame descriptor sets.
+///
+/// In this project, one descriptor set contains:
+/// - the camera uniform buffer
+/// - several sampled textures used by the main fragment shader
 pub struct Descriptors {
     pub pool:           vk::DescriptorPool,
     pub camera_layout:  vk::DescriptorSetLayout,
@@ -13,10 +18,14 @@ pub struct Descriptors {
 }
 
 impl Descriptors {
+    /// Creates the descriptor set layout, descriptor pool, and one descriptor set
+    /// for each frame in flight.
     pub fn new(device: &Device) -> Result<Self, Box<dyn Error>> {
         unsafe {
 
+            // These bindings must match what the shaders expect.
             let bindings = [
+                // Binding 0 = camera UBO, used by both vertex and fragment shaders.
                 vk::DescriptorSetLayoutBinding::default()
                     .binding(0)
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
@@ -24,6 +33,7 @@ impl Descriptors {
                     .stage_flags(
                         vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                     ),
+                // Bindings 1..5 = textures used by the terrain/world shader.
                 vk::DescriptorSetLayoutBinding::default()
                     .binding(1)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
@@ -54,11 +64,13 @@ impl Descriptors {
             let layout_info =
                 vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
 
+            // Create the descriptor set layout shared by all per-frame sets.
             let camera_layout = device
                 .device
                 .create_descriptor_set_layout(&layout_info, None)?;
 
 
+            // The pool must have enough space for all descriptors across all sets.
             let pool_sizes = [
                 vk::DescriptorPoolSize::default()
                     .ty(vk::DescriptorType::UNIFORM_BUFFER)
@@ -75,6 +87,7 @@ impl Descriptors {
             let pool = device.device.create_descriptor_pool(&pool_info, None)?;
 
 
+            // Allocate one descriptor set per frame in flight.
             let layouts    = [camera_layout; MAX_FRAMES_IN_FLIGHT];
             let alloc_info = vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(pool)
@@ -92,6 +105,7 @@ impl Descriptors {
         }
     }
 
+    /// Writes the camera uniform buffer into binding 0 for each frame's descriptor set.
     pub fn write_camera_sets(
         &self,
         device:    &Device,
@@ -116,6 +130,7 @@ impl Descriptors {
         }
     }
 
+    /// Writes all terrain/world textures into bindings 1..5 for each frame's set.
     pub fn write_texture_sets(
         &self,
         device:    &Device,
@@ -151,6 +166,7 @@ impl Descriptors {
                 .image_view(displace.view)
                 .sampler(displace.sampler);
 
+            // These writes connect each texture to the binding expected by the shader.
             let writes = [
                 vk::WriteDescriptorSet::default()
                     .dst_set(self.camera_sets[i])
@@ -185,6 +201,7 @@ impl Descriptors {
         }
     }
 
+    /// Destroys the descriptor pool and descriptor set layout.
     pub fn destroy(&self, device: &Device) {
         unsafe {
             device.device.destroy_descriptor_pool(self.pool, None);

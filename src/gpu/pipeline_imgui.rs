@@ -10,7 +10,8 @@ use super::{
     swapchain::SwapChain,
 };
 
-
+// Push constants used by the ImGui vertex shader.
+// They convert pixel-space UI coordinates into Vulkan clip space.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ImGuiPush {
@@ -18,7 +19,8 @@ struct ImGuiPush {
     translate: [f32; 2],
 }
 
-
+// Per-frame CPU-visible buffers that store ImGui-generated vertices and indices.
+// ImGui rebuilds its mesh every frame, so these buffers are updated often.
 struct FrameBuffers {
     vertex: Option<GpuBuffer>,
     index:  Option<GpuBuffer>,
@@ -32,6 +34,7 @@ impl FrameBuffers {
         }
     }
 
+    // Free any per-frame ImGui buffers that were allocated.
     fn destroy(&mut self, device: &Device, allocator: &GpuAllocator) {
         if let Some(buf) = self.vertex.take() {
             buf.destroy(device, allocator);
@@ -42,7 +45,11 @@ impl FrameBuffers {
     }
 }
 
-
+// Owns all Vulkan objects needed to render Dear ImGui:
+// - pipeline and layout
+// - font texture
+// - descriptor set for the font atlas
+// - dynamic vertex/index buffers for each frame in flight
 pub struct ImGuiPipeline {
     pipeline:        vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
@@ -57,6 +64,7 @@ pub struct ImGuiPipeline {
 }
 
 impl ImGuiPipeline {
+    // Create all Vulkan resources needed for UI rendering.
     pub fn new(
         device:    &Device,
         allocator: &GpuAllocator,
@@ -64,6 +72,8 @@ impl ImGuiPipeline {
         swapchain: &SwapChain,
         imgui_ctx: &mut imgui::Context,
     ) -> Result<Self, Box<dyn Error>> {
+        // ImGui only needs one sampled image in its descriptor set:
+        // the font atlas texture.
         let binding = vk::DescriptorSetLayoutBinding::default()
             .binding(0)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
@@ -78,6 +88,8 @@ impl ImGuiPipeline {
             )?
         };
 
+        // The vertex shader uses push constants to convert from pixel coordinates
+        // to clip-space coordinates.
         let push_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .offset(0)
@@ -115,16 +127,18 @@ impl ImGuiPipeline {
             )?[0]
         };
 
-
+        // Ask ImGui to build its font atlas as RGBA8 pixels on the CPU.
         let font_atlas = imgui_ctx.fonts();
         let atlas_texture = font_atlas.build_rgba32_texture();
         let width  = atlas_texture.width;
         let height = atlas_texture.height;
         let pixels = atlas_texture.data;
 
+        // Upload the font atlas to a Vulkan image so the fragment shader can sample it.
         let (font_image, font_view, font_sampler, font_alloc) =
             Self::upload_font_atlas(device, allocator, commands, pixels, width, height);
 
+        // TextureId 0 will refer to the uploaded font atlas.
         font_atlas.tex_id = imgui::TextureId::from(0);
 
         let image_info = vk::DescriptorImageInfo::default()
@@ -154,6 +168,7 @@ impl ImGuiPipeline {
         })
     }
 
+    // Record draw commands for one ImGui frame.
     pub fn record_commands(
         &mut self,
         device:      &Device,
@@ -167,18 +182,20 @@ impl ImGuiPipeline {
         let total_vtx = draw_data.total_vtx_count as usize;
         let total_idx = draw_data.total_idx_count as usize;
 
+        // Nothing to draw this frame.
         if total_vtx == 0 || total_idx == 0 {
             return;
         }
 
         let frame = frame_index % MAX_FRAMES_IN_FLIGHT;
 
-
+        // Compute how much buffer space this frame's UI mesh needs.
         let vtx_size = (total_vtx * std::mem::size_of::<imgui::DrawVert>()) as vk::DeviceSize;
         let idx_size = (total_idx * std::mem::size_of::<imgui::DrawIdx>()) as vk::DeviceSize;
 
         let fb = &mut self.frame_buffers[frame];
 
+        // Grow the CPU-visible vertex buffer if needed.
         if fb.vertex.as_ref().is_none_or(|b| b.size < vtx_size) {
             fb.vertex.take().map(|b| b.destroy(device, allocator));
             fb.vertex = Some(GpuBuffer::new(
@@ -188,6 +205,8 @@ impl ImGuiPipeline {
                 "imgui_vtx",
             ));
         }
+
+        // Grow the CPU-visible index buffer if needed.
         if fb.index.as_ref().is_none_or(|b| b.size < idx_size) {
             fb.index.take().map(|b| b.destroy(device, allocator));
             fb.index = Some(GpuBuffer::new(
@@ -201,12 +220,14 @@ impl ImGuiPipeline {
         let vb = fb.vertex.as_ref().unwrap();
         let ib = fb.index.as_ref().unwrap();
 
+        // These buffers are CPU-mapped, so we can copy ImGui data directly into them.
         let vb_ptr = vb.allocation.as_ref().unwrap().mapped_ptr().unwrap().as_ptr() as *mut u8;
         let ib_ptr = ib.allocation.as_ref().unwrap().mapped_ptr().unwrap().as_ptr() as *mut u8;
 
         let mut vtx_offset_bytes: usize = 0;
         let mut idx_offset_bytes: usize = 0;
 
+        // Copy each ImGui draw list into the big per-frame GPU buffers.
         for draw_list in draw_data.draw_lists() {
             let vtx_buf = draw_list.vtx_buffer();
             let idx_buf = draw_list.idx_buffer();
@@ -231,7 +252,6 @@ impl ImGuiPipeline {
             idx_offset_bytes += ib_bytes;
         }
 
-
         unsafe {
             device.device.cmd_bind_pipeline(
                 cmd,
@@ -248,6 +268,7 @@ impl ImGuiPipeline {
                 &[],
             );
 
+            // Convert pixel coordinates to clip space in the vertex shader.
             let push = ImGuiPush {
                 scale:     [2.0 / fb_width, 2.0 / fb_height],
                 translate: [-1.0, -1.0],
@@ -274,6 +295,7 @@ impl ImGuiPipeline {
         let mut global_vtx_offset: i32 = 0;
         let mut global_idx_offset: u32 = 0;
 
+        // Replay ImGui's draw commands list by list.
         for draw_list in draw_data.draw_lists() {
             let vtx_buf = draw_list.vtx_buffer();
             let idx_buf = draw_list.idx_buffer();
@@ -301,6 +323,8 @@ impl ImGuiPipeline {
                             let scissor_w = ((clip[2] - clip[0]).max(1.0)) as u32;
                             let scissor_h = ((clip[3] - clip[1]).max(1.0)) as u32;
 
+                            // ImGui provides a clip rectangle for each batch.
+                            // This becomes a Vulkan scissor rectangle.
                             device.device.cmd_set_scissor(cmd, 0, &[vk::Rect2D {
                                 offset: vk::Offset2D { x: scissor_x, y: scissor_y },
                                 extent: vk::Extent2D { width: scissor_w, height: scissor_h },
@@ -327,6 +351,7 @@ impl ImGuiPipeline {
     }
 
 
+    // Create the graphics pipeline used only for ImGui.
     fn create_pipeline(
         device:    &Device,
         swapchain: &SwapChain,
@@ -449,6 +474,7 @@ impl ImGuiPipeline {
         Ok(pipeline)
     }
 
+    // Load a compiled SPIR-V shader module from disk.
     fn load_shader(device: &Device, path: &str) -> Result<vk::ShaderModule, Box<dyn Error>> {
         let bytes = std::fs::read(path)?;
         let (prefix, code, suffix) = unsafe { bytes.align_to::<u32>() };
@@ -460,7 +486,7 @@ impl ImGuiPipeline {
         unsafe { Ok(device.device.create_shader_module(&info, None)?) }
     }
 
-
+    // Upload ImGui's font atlas pixels into a GPU image and create a view + sampler.
     fn upload_font_atlas(
         device:    &Device,
         allocator: &GpuAllocator,
@@ -474,6 +500,7 @@ impl ImGuiPipeline {
         let format = vk::Format::R8G8B8A8_UNORM;
 
         unsafe {
+            // Create the final GPU image that the fragment shader will sample.
             let image_info = vk::ImageCreateInfo::default()
                 .image_type(vk::ImageType::TYPE_2D)
                 .format(format)
@@ -501,6 +528,7 @@ impl ImGuiPipeline {
                 .bind_image_memory(image, allocation.memory(), allocation.offset())
                 .unwrap();
 
+            // Create a staging buffer so we can copy CPU font pixels into the GPU image.
             let staging = GpuBuffer::new(
                 device, allocator,
                 pixels.len() as vk::DeviceSize,
@@ -528,6 +556,7 @@ impl ImGuiPipeline {
             };
 
             commands.run_one_time(device, |dev, cmd| {
+                // Transition the image so it can receive copied pixel data.
                 let to_transfer = vk::ImageMemoryBarrier::default()
                     .src_access_mask(vk::AccessFlags::empty())
                     .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
@@ -557,12 +586,14 @@ impl ImGuiPipeline {
                     .image_offset(vk::Offset3D::default())
                     .image_extent(vk::Extent3D { width, height, depth: 1 });
 
+                // Copy staged CPU pixel data into the GPU image.
                 dev.cmd_copy_buffer_to_image(
                     cmd, staging.buffer, image,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     &[region],
                 );
 
+                // Transition the image into the layout used by shader sampling.
                 let to_shader = vk::ImageMemoryBarrier::default()
                     .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
                     .dst_access_mask(vk::AccessFlags::SHADER_READ)
@@ -590,6 +621,7 @@ impl ImGuiPipeline {
 
             let view = device.device.create_image_view(&view_info, None).unwrap();
 
+            // The font atlas uses simple linear sampling and clamps at the edges.
             let sampler_info = vk::SamplerCreateInfo::default()
                 .mag_filter(vk::Filter::LINEAR)
                 .min_filter(vk::Filter::LINEAR)
@@ -606,7 +638,7 @@ impl ImGuiPipeline {
         }
     }
 
-
+    // Destroy all Vulkan objects owned by the ImGui renderer.
     pub fn destroy(&mut self, device: &Device, allocator: &GpuAllocator) {
         for fb in &mut self.frame_buffers {
             fb.destroy(device, allocator);

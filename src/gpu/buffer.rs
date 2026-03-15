@@ -6,6 +6,9 @@ use gpu_allocator::{
 
 use super::{allocator::GpuAllocator, commands::Commands, device::Device};
 
+/// CPU-side vertex format sent to the GPU.
+///
+/// This must match the vertex shader input layout.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
@@ -16,6 +19,7 @@ pub struct Vertex {
 }
 
 impl Vertex {
+    /// Describes one vertex binding slot for Vulkan.
     pub fn binding_description() -> vk::VertexInputBindingDescription {
         vk::VertexInputBindingDescription::default()
             .binding(0)
@@ -23,6 +27,7 @@ impl Vertex {
             .input_rate(vk::VertexInputRate::VERTEX)
     }
 
+    /// Describes how each field in `Vertex` maps to shader locations.
     pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 4] {
         [
             vk::VertexInputAttributeDescription::default()
@@ -49,6 +54,7 @@ impl Vertex {
     }
 }
 
+/// Camera uniform data sent once per frame.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CameraUbo {
@@ -57,6 +63,7 @@ pub struct CameraUbo {
     pub cam_pos: [f32; 4],
 }
 
+/// Per-draw push constants for the main world shader.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PushConstants {
@@ -65,6 +72,7 @@ pub struct PushConstants {
     pub time:      f32,
 }
 
+/// Per-draw push constants for the sky shader.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SkyPushConstants {
@@ -75,6 +83,7 @@ pub struct SkyPushConstants {
     pub _pad2:       f32,
 }
 
+/// Generic Vulkan buffer plus its memory allocation.
 pub struct GpuBuffer {
     pub buffer: vk::Buffer,
     pub allocation: Option<Allocation>,
@@ -82,6 +91,7 @@ pub struct GpuBuffer {
 }
 
 impl GpuBuffer {
+    /// Creates a Vulkan buffer and allocates memory for it.
     pub fn new(
         device: &Device,
         allocator: &GpuAllocator,
@@ -120,6 +130,9 @@ impl GpuBuffer {
         }
     }
 
+    /// Writes CPU data directly into a mapped buffer.
+    ///
+    /// This is mainly used for uniform buffers.
     pub fn write<T: bytemuck::NoUninit>(&self, data: &T) {
         let alloc = self.allocation.as_ref().expect("Buffer already destroyed");
         let ptr = alloc.mapped_ptr().expect("Buffer not mapped");
@@ -132,6 +145,9 @@ impl GpuBuffer {
         }
     }
 
+    /// Creates a GPU-only buffer and uploads data into it through a staging buffer.
+    ///
+    /// This is the usual path for vertex and index buffers.
     pub fn device_local(
         device: &Device,
         allocator: &GpuAllocator,
@@ -142,6 +158,7 @@ impl GpuBuffer {
     ) -> Self {
         let size = data.len() as vk::DeviceSize;
 
+        // First create a CPU-visible staging buffer.
         let staging = Self::new(
             device,
             allocator,
@@ -151,6 +168,7 @@ impl GpuBuffer {
             &format!("{name}_staging"),
         );
 
+        // Copy raw bytes into the staging buffer.
         if let Some(alloc) = &staging.allocation {
             if let Some(ptr) = alloc.mapped_ptr() {
                 unsafe {
@@ -163,6 +181,7 @@ impl GpuBuffer {
             }
         }
 
+        // Then create the final GPU-only buffer.
         let gpu_buf = Self::new(
             device,
             allocator,
@@ -172,6 +191,7 @@ impl GpuBuffer {
             name,
         );
 
+        // Copy data from staging into the final GPU buffer.
         commands.run_one_time(device, |dev, cmd| {
             let region = vk::BufferCopy::default().size(size);
             unsafe { dev.cmd_copy_buffer(cmd, staging.buffer, gpu_buf.buffer, &[region]) };
@@ -181,6 +201,7 @@ impl GpuBuffer {
         gpu_buf
     }
 
+    /// Destroys the Vulkan buffer and frees its memory.
     pub fn destroy(mut self, device: &Device, allocator: &GpuAllocator) {
         unsafe { device.device.destroy_buffer(self.buffer, None) };
         if let Some(alloc) = self.allocation.take() {
@@ -189,6 +210,7 @@ impl GpuBuffer {
     }
 }
 
+/// Simple mesh wrapper containing a vertex buffer and an index buffer.
 pub struct GpuMesh {
     pub vertex_buffer: GpuBuffer,
     pub index_buffer: GpuBuffer,
@@ -196,6 +218,7 @@ pub struct GpuMesh {
 }
 
 impl GpuMesh {
+    /// Uploads CPU-side mesh data into GPU vertex and index buffers.
     pub fn upload(
         device: &Device,
         allocator: &GpuAllocator,
@@ -228,6 +251,7 @@ impl GpuMesh {
         }
     }
 
+    /// Destroys both GPU buffers owned by the mesh.
     pub fn destroy(self, device: &Device, allocator: &GpuAllocator) {
         self.vertex_buffer.destroy(device, allocator);
         self.index_buffer.destroy(device, allocator);

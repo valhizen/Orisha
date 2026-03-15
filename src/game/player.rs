@@ -5,6 +5,7 @@ use crate::gpu::buffer::Vertex;
 use super::physics::{self, Capsule, CollisionResult};
 use super::world_generation::Terrain;
 
+/// Stores the player transform, movement state, and collision settings.
 pub struct Player {
     pub position: Vec3,
     pub rotation: Quat,
@@ -20,6 +21,7 @@ pub struct Player {
 }
 
 impl Player {
+    /// Creates a player at the given world position.
     pub fn new(position: Vec3) -> Self {
         let height = 2.0;
         let radius = 0.4;
@@ -38,6 +40,9 @@ impl Player {
         }
     }
 
+    /// Sets horizontal movement from input.
+    ///
+    /// This changes only X/Z velocity. Vertical motion is handled by physics.
     pub fn move_direction(&mut self, direction: Vec3, sprinting: bool) {
         if direction.length_squared() > 0.0 {
             let speed = if sprinting {
@@ -50,15 +55,18 @@ impl Player {
             self.velocity.x = movement.x;
             self.velocity.z = movement.z;
 
+            // Rotate the player to face the movement direction.
             if movement.length_squared() > 0.01 {
                 self.rotation = Quat::from_rotation_y(movement.x.atan2(movement.z));
             }
         } else {
+            // Simple damping when there is no input.
             self.velocity.x *= 0.8;
             self.velocity.z *= 0.8;
         }
     }
 
+    /// Advances the player by one physics step against the terrain.
     pub fn update(&mut self, delta_time: f32, terrain: &Terrain) {
         let result: CollisionResult =
             physics::step(self.position, self.velocity, delta_time, &self.collider, terrain);
@@ -69,6 +77,7 @@ impl Player {
         self.ground_normal = result.ground_normal;
     }
 
+    /// Starts a jump only if the player is on the ground.
     pub fn jump(&mut self) {
         if self.is_grounded {
             self.velocity.y = self.jump_force;
@@ -76,19 +85,23 @@ impl Player {
         }
     }
 
+    /// Returns the player's local forward direction in world space.
     pub fn forward(&self) -> Vec3 {
         self.rotation * Vec3::Z
     }
 
+    /// Returns the player's local right direction in world space.
     pub fn right(&self) -> Vec3 {
         self.rotation * Vec3::X
     }
 
+    /// Returns a point a bit above the body, useful for camera follow.
     pub fn shoulder_position(&self) -> Vec3 {
         self.position + Vec3::new(0.0, self.height * 0.3, 0.0)
     }
 }
 
+/// Builds a simple box mesh that can be used as a placeholder player model.
 pub fn player_geometry() -> (Vec<Vertex>, Vec<u32>) {
     let hw = 0.5;
     let hh = 1.0;
